@@ -55,30 +55,62 @@ local function CyrFontFor(font)
     return nil
 end
 
+local function NormFontPath(path)
+    return (path:lower():gsub("/", "\\"))
+end
+
+-- Never throws. New clients reject a nil flags argument, and some return
+-- nothing from SetFont, so success is read back with GetFont.
+local function TrySetFont(fontString, font, size, flags)
+    if type(font) ~= "string" or not size then
+        return false
+    end
+    local ok, set = pcall(fontString.SetFont, fontString, font, size, flags or "")
+    if not ok then
+        return false
+    end
+    if set then
+        return true
+    end
+    local okGet, now = pcall(fontString.GetFont, fontString)
+    return okGet and type(now) == "string" and NormFontPath(now) == NormFontPath(font)
+end
+
 function GQ.SetFontCyr(fontString, font, size, flags)
     if not fontString or not fontString.SetFont or not font then
         return false
     end
     local cyr = CyrFontFor(font)
-    if cyr then
-        local ok, set = pcall(fontString.SetFont, fontString, cyr, size, flags)
-        if ok and set then
-            return true
-        end
+    if cyr and TrySetFont(fontString, cyr, size, flags) then
+        return true
     end
-    return fontString:SetFont(font, size, flags)
+    return TrySetFont(fontString, font, size, flags)
 end
 
 -- Swap a font string's current face for the Cyrillic one, keeping size and flags.
+-- If the client refuses, the template font object is put back as it was.
 function GQ.ApplyCyrFont(fontString)
-    if not fontString or not fontString.GetFont then
+    if not fontString or not fontString.GetFont or not fontString.SetFont then
         return false
     end
     local ok, font, size, flags = pcall(fontString.GetFont, fontString)
-    if not ok or not font or not size or not CyrFontFor(font) then
+    if not ok or not size then
         return false
     end
-    return GQ.SetFontCyr(fontString, font, size, flags)
+    local cyr = CyrFontFor(font)
+    if not cyr then
+        return false
+    end
+    local okObj, fontObject = pcall(fontString.GetFontObject, fontString)
+    if TrySetFont(fontString, cyr, size, flags) then
+        return true
+    end
+    if okObj and fontObject and fontString.SetFontObject then
+        pcall(fontString.SetFontObject, fontString, fontObject)
+    else
+        TrySetFont(fontString, font, size, flags)
+    end
+    return false
 end
 
 -- Upper case for ASCII and Russian letters in UTF-8. Lua's string.upper works
