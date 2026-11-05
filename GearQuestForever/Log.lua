@@ -101,8 +101,8 @@ local LIST_ROW_RIGHT_PAD = 6
 local LIST_ROW_ITEM_LEFT = 20
 local LIST_ROW_NOTABLE_LEFT = 24
 local LIST_NEW_LABEL = " |cffFFD200Новое|r"
--- Track button caption. WireControls compares the button text against it.
-local TRACK_BUTTON_TEXT = "Отслеживать"
+-- Lua 5.1 allows 200 file-level locals and this file is at 198. Do not add
+-- new top-level locals here; put display tables in GQ.RU (Core.lua).
 local LIST_TOOLTIP_X_GAP = 20
 local NOTABLE_LIST_ICON = "Interface\\GossipFrame\\AvailableQuestIcon"
 local SCROLLBAR_WIDTH = 18
@@ -3093,20 +3093,11 @@ function GQ.Log:FactionStandingId(standings, faction)
     return standings[key]
 end
 
--- Display names only (ruRU client wording). The English keys above stay the logic.
-local REP_STANDING_RU = {
-    Hated = "Ненависть", Hostile = "Враждебность", Unfriendly = "Неприязнь", Neutral = "Равнодушие",
-    Friendly = "Дружелюбие", Honored = "Уважение", Revered = "Почтение", Exalted = "Превознесение",
-}
-
-local function RepStandingDisplay(standing)
-    return (standing and REP_STANDING_RU[standing]) or standing
-end
 
 function GQ.Log:ReputationRequirementLine(faction, standing)
     local need = self:RepRank(standing)
     local standings = self:PlayerFactionStandings()
-    local standingText = RepStandingDisplay(standing)
+    local standingText = GQ.RuLabel("repStanding", standing)
     -- A failed read is not the same as a faction this character has never seen.
     if not standings then
         return string.format("\nТребуется репутация «%s» у фракции %s.", standingText, faction)
@@ -3119,7 +3110,7 @@ function GQ.Log:ReputationRequirementLine(faction, standing)
             faction
         )
     end
-    local haveName = RepStandingDisplay(self:RepStandingName(have)) or "Неизвестно"
+    local haveName = GQ.RuLabel("repStanding", self:RepStandingName(have)) or "Неизвестно"
     local met = need and have >= need
     local color = met and "|cff0c4a1c" or "|cff6e1212"
     return string.format(
@@ -6863,7 +6854,7 @@ function GQ.Log:UpdateFooterButtons()
             track:SetText("Не отслеживать")
             track:SetEnabled(selectedId ~= nil)
         else
-            track:SetText(TRACK_BUTTON_TEXT)
+            track:SetText(GQ.TRACK_BUTTON_TEXT)
             track:SetEnabled(selectedId ~= nil)
         end
     end
@@ -11698,7 +11689,7 @@ function GQ.Log:WireControls(frame)
         end
     end)
     frame.trackBtn:SetScript("OnEnter", function(self)
-        if self:GetText() ~= TRACK_BUTTON_TEXT then
+        if self:GetText() ~= GQ.TRACK_BUTTON_TEXT then
             return
         end
         GameTooltip:SetOwner(self, "ANCHOR_TOP")
@@ -12113,7 +12104,7 @@ function GQ.Log:Init()
 
     frame.trackBtn = CreateFrame("Button", "GearQuestLogTrackButton", frame.detailBg, "UIPanelButtonTemplate")
     frame.trackBtn:SetSize(106, 22)
-    frame.trackBtn:SetText(TRACK_BUTTON_TEXT)
+    frame.trackBtn:SetText(GQ.TRACK_BUTTON_TEXT)
 
     frame.untrackBtn = CreateFrame("Button", "GearQuestLogUntrackButton", frame, "UIPanelButtonTemplate")
     frame.untrackBtn:SetSize(106, 22)
@@ -14798,12 +14789,6 @@ function GQ.Log:EnsureWeaponMenu()
     return menu
 end
 
--- Display names for the weapon and ranged type keys. The keys stay English.
-local WEAPON_TYPE_RU = {
-    Dagger = "Кинжал", Sword = "Меч", Mace = "Дробящее оружие", Axe = "Топор",
-    Fist = "Кистевое оружие", Polearm = "Древковое оружие", Staff = "Посох",
-    Bow = "Лук", Gun = "Огнестрельное оружие", Crossbow = "Арбалет",
-}
 
 function GQ.Log:FillWeaponMenu()
     local menu = self:EnsureWeaponMenu()
@@ -14861,7 +14846,7 @@ function GQ.Log:FillWeaponMenu()
             checked = self:WeaponStyleEnabled(line.id)
             check.label:SetTextColor(1, 0.82, 0)
         else
-            name = WEAPON_TYPE_RU[line.id] or line.id
+            name = GQ.RuLabel("weaponType", line.id)
             checked = self:WeaponTypeChecked(line.style, line.id)
             if self:WeaponStyleEnabled(line.style) then
                 check.label:SetTextColor(1, 1, 1)
@@ -14928,7 +14913,7 @@ function GQ.Log:FillRangedMenu()
         check.kind = "ranged"
         check.choiceId = typeId
         check.styleId = nil
-        check.label:SetText(WEAPON_TYPE_RU[typeId] or typeId)
+        check.label:SetText(GQ.RuLabel("weaponType", typeId))
         check.label:SetTextColor(1, 1, 1)
         check:SetChecked(self:RangedTypeChecked(typeId))
         check:ClearAllPoints()

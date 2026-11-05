@@ -154,7 +154,21 @@ GQ.RU = {
         Cloth = "Ткань", Leather = "Кожа", Mail = "Кольчуга", Plate = "Латы", Shield = "Щит",
         Idol = "Идол", Libram = "Манускрипт", Totem = "Тотем", Relic = "Реликвия",
     },
+    -- Log.lua sits at Lua 5.1's limit of 200 file-level locals, so its display
+    -- tables live here instead of as locals there.
+    repStanding = {
+        Hated = "Ненависть", Hostile = "Враждебность", Unfriendly = "Неприязнь", Neutral = "Равнодушие",
+        Friendly = "Дружелюбие", Honored = "Уважение", Revered = "Почтение", Exalted = "Превознесение",
+    },
+    weaponType = {
+        Dagger = "Кинжал", Sword = "Меч", Mace = "Дробящее оружие", Axe = "Топор",
+        Fist = "Кистевое оружие", Polearm = "Древковое оружие", Staff = "Посох",
+        Bow = "Лук", Gun = "Огнестрельное оружие", Crossbow = "Арбалет",
+    },
 }
+
+-- Track button caption. Log.lua's WireControls compares the button text against it.
+GQ.TRACK_BUTTON_TEXT = "Отслеживать"
 
 -- GQ.RuLabel("class", "WARRIOR") -> "Воин". Unknown keys come back unchanged.
 function GQ.RuLabel(kind, key)
