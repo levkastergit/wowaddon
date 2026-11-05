@@ -1116,6 +1116,7 @@ local function MakeBody(parent)
     if not ok or not body then
         body = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     end
+    GQ.ApplyCyrFont(body)
     return body
 end
 

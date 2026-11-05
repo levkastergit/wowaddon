@@ -793,10 +793,13 @@ local function CreateFontStringWithFallback(parent, candidates)
     for _, font in ipairs(candidates) do
         local ok, created = pcall(parent.CreateFontString, parent, nil, "ARTWORK", font)
         if ok and created then
+            GQ.ApplyCyrFont(created)
             return created
         end
     end
-    return parent:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    local created = parent:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    GQ.ApplyCyrFont(created)
+    return created
 end
 
 local PARCHMENT_TEXTURE = "Interface\\AddOns\\" .. tostring(ADDON_NAME) .. "\\Textures\\GQ-Parchment.png"
@@ -13861,12 +13864,8 @@ function GQ.Log:ApplyEntryDetail(entry)
         and GQ.Data.ItemInfoIsReady and not GQ.Data:ItemInfoIsReady(entry.itemId) then
         GQ.Data:RequestItemInfo(entry.itemId, true)
     end
-    -- Lua upper() only changes Latin letters. A name with Cyrillic (or any
-    -- non-ASCII) letters stays as the client wrote it.
-    local title = itemName
-    if not itemName:find("[\128-\255]") then
-        title = itemName:upper()
-    end
+    -- Lua upper() corrupts Cyrillic; GQ.UpperUTF8 handles ASCII and Russian.
+    local title = GQ.UpperUTF8(itemName)
     if GQ.Data and GQ.Data.SanitizeText then
         title = GQ.Data:SanitizeText(title) or title
     end

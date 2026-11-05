@@ -108,10 +108,13 @@ local function CreateFontStringWithFallback(parent, candidates)
     for _, font in ipairs(candidates) do
         local ok, fs = pcall(parent.CreateFontString, parent, nil, "ARTWORK", font)
         if ok and fs then
+            GQ.ApplyCyrFont(fs)
             return fs
         end
     end
-    return parent:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    local fs = parent:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    GQ.ApplyCyrFont(fs)
+    return fs
 end
 
 local function ConfigureWrappedFontString(fs)

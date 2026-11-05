@@ -38,20 +38,28 @@ function GQ.Plural(n, one, few, many)
     return many
 end
 
--- Russian UI text needs Cyrillic glyphs. A plain font path drops the client's
--- per-alphabet fallback, so try the matching _CYR file first and keep the
--- original font if that file is missing on this client.
-local CYR_FONTS = {
-    ["fonts\\frizqt__.ttf"] = "Fonts\\FRIZQT___CYR.TTF",
-    ["fonts\\morpheus.ttf"] = "Fonts\\MORPHEUS_CYR.TTF",
-    ["fonts\\skurri.ttf"] = "Fonts\\SKURRI_CYR.TTF",
-}
+-- Russian UI text needs Cyrillic glyphs. The decorative quest faces (Morpheus,
+-- Skurri) draw Cyrillic badly or not at all, so the addon's own text uses
+-- Friz Quadrata CYR - the main font of the Russian client. The original font
+-- stays if that file is missing on this client.
+local CYR_FONT_FILE = "Fonts\\FRIZQT___CYR.TTF"
+
+local function CyrFontFor(font)
+    if type(font) ~= "string" or font == "" then
+        return nil
+    end
+    local key = font:lower():gsub("/", "\\")
+    if key == "fonts\\frizqt__.ttf" or key:find("morpheus", 1, true) or key:find("skurri", 1, true) then
+        return CYR_FONT_FILE
+    end
+    return nil
+end
 
 function GQ.SetFontCyr(fontString, font, size, flags)
     if not fontString or not fontString.SetFont or not font then
         return false
     end
-    local cyr = type(font) == "string" and CYR_FONTS[(font:lower():gsub("/", "\\"))]
+    local cyr = CyrFontFor(font)
     if cyr then
         local ok, set = pcall(fontString.SetFont, fontString, cyr, size, flags)
         if ok and set then
@@ -59,6 +67,38 @@ function GQ.SetFontCyr(fontString, font, size, flags)
         end
     end
     return fontString:SetFont(font, size, flags)
+end
+
+-- Swap a font string's current face for the Cyrillic one, keeping size and flags.
+function GQ.ApplyCyrFont(fontString)
+    if not fontString or not fontString.GetFont then
+        return false
+    end
+    local ok, font, size, flags = pcall(fontString.GetFont, fontString)
+    if not ok or not font or not size or not CyrFontFor(font) then
+        return false
+    end
+    return GQ.SetFontCyr(fontString, font, size, flags)
+end
+
+-- Upper case for ASCII and Russian letters in UTF-8. Lua's string.upper works
+-- on single bytes and corrupts Cyrillic, so map the two-byte letters directly:
+-- а-п (D0 B0-BF) -> А-П (D0 90-9F), р-я (D1 80-8F) -> Р-Я (D0 A0-AF), ё -> Ё.
+function GQ.UpperUTF8(s)
+    if type(s) ~= "string" then
+        return s
+    end
+    s = s:gsub("[a-z]", function(c)
+        return string.char(c:byte() - 32)
+    end)
+    s = s:gsub("\208([\176-\191])", function(c)
+        return "\208" .. string.char(c:byte() - 32)
+    end)
+    s = s:gsub("\209([\128-\143])", function(c)
+        return "\208" .. string.char(c:byte() + 32)
+    end)
+    s = s:gsub("\209\145", "\208\129")
+    return s
 end
 
 -- Russian display names for English keys. Keys stay English everywhere in the
