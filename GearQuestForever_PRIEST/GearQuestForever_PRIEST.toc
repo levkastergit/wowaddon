@@ -1,0 +1,14 @@
+## Interface: 16001
+## Title: GearQuest Forever: Priest
+## Title-ruRU: GearQuest Forever: Жрец
+## Notes: Списки целей для этого класса. GearQuest Forever загружает их, когда вы играете этим классом или симулируете его.
+## Author: Henrik8210
+## Version: 1.0.7
+## IconTexture: Interface\Icons\ClassIcon_Priest
+## LoadOnDemand: 1
+## Dependencies: GearQuestForever
+## RequiredDeps: GearQuestForever
+
+Data.Priest.generated.lua
+Data.Priest.Early.1to9.generated.lua
+AuditTips.lua

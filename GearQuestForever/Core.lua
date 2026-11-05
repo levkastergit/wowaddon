@@ -38,18 +38,31 @@ function GQ.Plural(n, one, few, many)
     return many
 end
 
--- Russian UI text needs Cyrillic glyphs. The decorative quest faces (Morpheus,
--- Skurri) draw Cyrillic badly or not at all, so the addon's own text uses
--- Friz Quadrata CYR - the main font of the Russian client. The original font
--- stays if that file is missing on this client.
+-- Russian UI text needs Cyrillic glyphs. Blizzard's font families already use
+-- the _CYR files on the Russian client (Blizzard_Fonts_Shared/Shared/Fonts.xml:
+-- QuestFont_Huge -> Fonts\MORPHEUS_CYR.TTF, system fonts -> Fonts\FRIZQT___CYR.TTF).
+-- A font string only loses them when SetFont gets a plain Latin file, so such a
+-- file is swapped for its Cyrillic twin of the same face; a _CYR file stays.
 local CYR_FONT_FILE = "Fonts\\FRIZQT___CYR.TTF"
+local CYR_TWIN = {
+    ["fonts\\frizqt__.ttf"] = CYR_FONT_FILE,
+    ["fonts\\morpheus.ttf"] = "Fonts\\MORPHEUS_CYR.TTF",
+}
 
+-- Returns the Cyrillic twin and a plain fallback, or nil if the font is fine.
 local function CyrFontFor(font)
     if type(font) ~= "string" or font == "" then
         return nil
     end
     local key = font:lower():gsub("/", "\\")
-    if key == "fonts\\frizqt__.ttf" or key:find("morpheus", 1, true) or key:find("skurri", 1, true) then
+    if key:find("_cyr", 1, true) then
+        return nil
+    end
+    local twin = CYR_TWIN[key]
+    if twin then
+        return twin, twin ~= CYR_FONT_FILE and CYR_FONT_FILE or nil
+    end
+    if key:find("morpheus", 1, true) or key:find("skurri", 1, true) then
         return CYR_FONT_FILE
     end
     return nil
@@ -80,8 +93,11 @@ function GQ.SetFontCyr(fontString, font, size, flags)
     if not fontString or not fontString.SetFont or not font then
         return false
     end
-    local cyr = CyrFontFor(font)
+    local cyr, alt = CyrFontFor(font)
     if cyr and TrySetFont(fontString, cyr, size, flags) then
+        return true
+    end
+    if alt and TrySetFont(fontString, alt, size, flags) then
         return true
     end
     return TrySetFont(fontString, font, size, flags)
@@ -97,12 +113,15 @@ function GQ.ApplyCyrFont(fontString)
     if not ok or not size then
         return false
     end
-    local cyr = CyrFontFor(font)
+    local cyr, alt = CyrFontFor(font)
     if not cyr then
         return false
     end
     local okObj, fontObject = pcall(fontString.GetFontObject, fontString)
     if TrySetFont(fontString, cyr, size, flags) then
+        return true
+    end
+    if alt and TrySetFont(fontString, alt, size, flags) then
         return true
     end
     if okObj and fontObject and fontString.SetFontObject then
@@ -131,6 +150,64 @@ function GQ.UpperUTF8(s)
     end)
     s = s:gsub("\209\145", "\208\129")
     return s
+end
+
+-- Lower case for ASCII and Russian letters in UTF-8, the mirror of UpperUTF8:
+-- А-П (D0 90-9F) -> а-п (D0 B0-BF), Р-Я (D0 A0-AF) -> р-я (D1 80-8F), Ё -> ё.
+-- Use it on both sides of a case-insensitive comparison of client text.
+function GQ.LowerUTF8(s)
+    if type(s) ~= "string" then
+        return s
+    end
+    s = s:gsub("[A-Z]", function(c)
+        return string.char(c:byte() + 32)
+    end)
+    s = s:gsub("\208([\144-\159])", function(c)
+        return "\208" .. string.char(c:byte() + 32)
+    end)
+    s = s:gsub("\208([\160-\175])", function(c)
+        return "\209" .. string.char(c:byte() - 32)
+    end)
+    s = s:gsub("\208\129", "\209\145")
+    return s
+end
+
+-- Old scraped text can carry Windows-1252 quotes and dashes as single bytes:
+-- 0x91-0x94 (' ' " ") and 0x96-0x97 (- -). In UTF-8 the same byte values are
+-- the second byte of Б В Г Д Ж З and ё, so replacing them everywhere cut those
+-- letters in half and the game drew a box plus an apostrophe. Only stray bytes,
+-- ones that are not part of a valid UTF-8 character, are replaced here.
+local CP1252_PUNCT = {
+    ["\145"] = "'", ["\146"] = "'", ["\147"] = "'", ["\148"] = "'",
+    ["\150"] = "-", ["\151"] = "-",
+}
+
+-- Number of continuation bytes a UTF-8 lead byte needs, 0 for an invalid lead.
+local function Utf8TailLength(byte)
+    if byte >= 194 and byte <= 223 then
+        return 1
+    elseif byte >= 224 and byte <= 239 then
+        return 2
+    elseif byte >= 240 and byte <= 244 then
+        return 3
+    end
+    return 0
+end
+
+function GQ.FixStrayCp1252(text)
+    if type(text) ~= "string" or not text:find("[\145-\151]") then
+        return text
+    end
+    return (text:gsub("([\192-\255]?)([\128-\191]+)", function(lead, run)
+        local tail = lead ~= "" and Utf8TailLength(lead:byte()) or 0
+        if tail > 0 and #run >= tail then
+            if #run == tail then
+                return nil
+            end
+            return lead .. run:sub(1, tail) .. (run:sub(tail + 1):gsub("[\145-\151]", CP1252_PUNCT))
+        end
+        return lead .. (run:gsub("[\145-\151]", CP1252_PUNCT))
+    end))
 end
 
 -- Russian display names for English keys. Keys stay English everywhere in the

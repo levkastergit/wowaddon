@@ -1546,12 +1546,10 @@ function GQ.Data:SanitizeText(text)
     text = text:gsub("\226\128\152", "'") -- left single quote
     text = text:gsub("\226\128\153", "'") -- right single quote
     text = text:gsub("\194\160", " ")
-    text = text:gsub("\147", "'") -- cp1252 left double quote
-    text = text:gsub("\148", "'") -- cp1252 right double quote
-    text = text:gsub("\145", "'")
-    text = text:gsub("\146", "'")
-    text = text:gsub("\151", "-")
-    text = text:gsub("\150", "-")
+    -- cp1252 single-byte quotes and dashes. Their byte values are also the
+    -- second byte of the UTF-8 letters Б В Г Д Ж З ё; GQ.FixStrayCp1252 only
+    -- touches bytes outside UTF-8 characters, so Russian text stays whole.
+    text = GQ.FixStrayCp1252(text)
     -- Wowhead quest text keeps HTML entities. &nbsp; is a space, and
     -- &lt;name&gt; is the character. Decode those before the parchment draws.
     local named = {

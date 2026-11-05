@@ -9,6 +9,10 @@
 ## SavedVariablesPerCharacter: GearQuestForeverCharDB
 
 Core.lua
+L10N.lua
+_generated/L10N.Text.ru.generated.lua
+_generated/L10N.Tips.ru.generated.lua
+_generated/L10N.Ids.generated.lua
 Spec.lua
 CustomSpec.lua
 Preview.lua

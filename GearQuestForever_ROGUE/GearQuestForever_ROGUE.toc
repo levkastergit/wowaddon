@@ -1,0 +1,14 @@
+## Interface: 16001
+## Title: GearQuest Forever: Rogue
+## Title-ruRU: GearQuest Forever: Разбойник
+## Notes: Списки целей для этого класса. GearQuest Forever загружает их, когда вы играете этим классом или симулируете его.
+## Author: Henrik8210
+## Version: 1.0.7
+## IconTexture: Interface\Icons\ClassIcon_Rogue
+## LoadOnDemand: 1
+## Dependencies: GearQuestForever
+## RequiredDeps: GearQuestForever
+
+Data.Rogue.generated.lua
+Data.Rogue.Early.1to9.generated.lua
+AuditTips.lua

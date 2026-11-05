@@ -3252,13 +3252,21 @@ end
 function GQ.Log:ReadProfessionRanks()
     local ranks = {}
     local scanned = false
-    local function note(name, rank)
+    -- The client names skills in its own language ("Портняжное дело"), while
+    -- every caller looks ranks up by the English data key ("Tailoring"), so
+    -- known skills are stored under that key. The SkillLine ID from
+    -- GetProfessionInfo is the surest; otherwise the name is matched.
+    local L10N = GQ.L10N
+    local function note(name, rank, skillLine)
         if issecretvalue and issecretvalue(name) then
             return
         end
         rank = tonumber(rank)
         if type(name) ~= "string" or name == "" or not rank or rank <= 0 then
             return
+        end
+        if L10N and L10N.SkillKey then
+            name = (skillLine and L10N.SkillLineKey(skillLine)) or L10N.SkillKey(name) or name
         end
         if not ranks[name] or rank > ranks[name] then
             ranks[name] = rank
@@ -3300,9 +3308,10 @@ function GQ.Log:ReadProfessionRanks()
             for i = 1, #indexes do
                 local index = indexes[i]
                 if index then
-                    local got, name, _, skillLevel = pcall(GetProfessionInfo, index)
+                    -- returns: name, texture, rank, maxRank, numSpells, spellOffset, skillLine
+                    local got, name, _, skillLevel, _, _, _, skillLine = pcall(GetProfessionInfo, index)
                     if got then
-                        note(name, skillLevel)
+                        note(name, skillLevel, skillLine)
                     end
                 end
             end

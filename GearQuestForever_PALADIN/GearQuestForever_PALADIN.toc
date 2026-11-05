@@ -1,0 +1,14 @@
+## Interface: 16001
+## Title: GearQuest Forever: Paladin
+## Title-ruRU: GearQuest Forever: Паладин
+## Notes: Списки целей для этого класса. GearQuest Forever загружает их, когда вы играете этим классом или симулируете его.
+## Author: Henrik8210
+## Version: 1.0.7
+## IconTexture: Interface\Icons\ClassIcon_Paladin
+## LoadOnDemand: 1
+## Dependencies: GearQuestForever
+## RequiredDeps: GearQuestForever
+
+Data.Paladin.generated.lua
+Data.Paladin.Early.1to9.generated.lua
+AuditTips.lua
