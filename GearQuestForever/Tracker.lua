@@ -546,13 +546,34 @@ function GQ.Tracker:LayoutEntries(entries, descWordLimit)
         end
 
         local itemName = row.cachedItemName
-        local instructions = entry.instructions
+        -- Display only: the client's full item name (with its own random
+        -- suffix) when known. cachedItemName keeps the placeholder check above.
+        if GQ.Data and GQ.Data.GetEntryShowName then
+            local shown = GQ.Data:GetEntryShowName(entry)
+            if type(shown) == "string" and shown ~= "" then
+                itemName = shown
+            end
+        end
+        local instructions
         if entry.sourceType == "profession" and GQ.Data and GQ.Data.GetProfessionInstructions then
+            -- Display text from Data.lua, which owns translating its English tail.
             instructions = GQ.Data:GetProfessionInstructions(entry)
-        elseif GQ.Data and GQ.Data.VendorBoughtLine then
-            local vendorLine = GQ.Data:VendorBoughtLine(entry)
+        else
+            -- The log's source: GetEntryInstructions holds the Rune Broker
+            -- override. The whole stored text is the GQ.L10N key, so it is
+            -- translated here, before SanitizeText and FirstWords change it.
+            local raw = (GQ.Data and GQ.Data.GetEntryInstructions and GQ.Data:GetEntryInstructions(entry))
+                or entry.instructions
+            local vendorLine, vendorPrefix, vendorRest
+            if GQ.Data and GQ.Data.VendorBoughtLine then
+                vendorLine, vendorPrefix, vendorRest = GQ.Data:VendorBoughtLine(entry)
+            end
             if vendorLine and vendorLine ~= "" then
-                instructions = vendorLine
+                instructions = (GQ.Log and GQ.Log.VendorLineText
+                    and GQ.Log:VendorLineText(raw, vendorLine, vendorPrefix, vendorRest, false)) or vendorLine
+            else
+                local L10N = GQ.L10N
+                instructions = (L10N and L10N.Text and L10N:Text(raw)) or raw
             end
         end
         if GQ.Data and GQ.Data.SanitizeText then

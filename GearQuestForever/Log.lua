@@ -491,7 +491,25 @@ local function ExtractItemIdFromChatMessage(msg)
         return nil
     end
 
-    -- Only the local player's craft/loot lines — never party loot chat with item links.
+    -- The client writes the local player's loot and craft lines from its own
+    -- GlobalStrings ("Вы создаете: %s." on ruRU, "You create: %s." on enUS):
+    -- match their fixed start and take the item id from the link.
+    local prefixes = GQ.Log and GQ.Log.OwnItemChatPrefixes and GQ.Log:OwnItemChatPrefixes()
+    if prefixes then
+        for i = 1, #prefixes do
+            local prefix = prefixes[i]
+            if msg:sub(1, #prefix) == prefix then
+                local itemId = tonumber(msg:match("item:(%d+)"))
+                if itemId then
+                    return itemId
+                end
+                break
+            end
+        end
+    end
+
+    -- English fallbacks. Only the local player's craft/loot lines — never
+    -- party loot chat with item links.
     if msg:find("You create", 1, true) then
         local itemId = tonumber(msg:match("item:(%d+)"))
         if itemId then
@@ -2731,7 +2749,50 @@ function GQ.Log:ZoneNamesMatch(a, b)
     if a == b then
         return true
     end
-    return string.lower(a) == string.lower(b)
+    -- string.lower leaves Cyrillic as is; GQ.LowerUTF8 maps ASCII and Russian.
+    local lower = GQ.LowerUTF8 or string.lower
+    return lower(a) == lower(b)
+end
+
+-- GetRealZoneText answers in the client's language, while the data names
+-- zones in English. The client's own name for a data zone: by the spot's
+-- uiMapID when there is one, else through the GQ.L10N id tables. Unknown
+-- zones keep the English name.
+function GQ.Log:ClientZoneName(name, mapId)
+    mapId = tonumber(mapId)
+    if mapId and C_Map and C_Map.GetMapInfo then
+        local cache = self._clientMapNames
+        if not cache then
+            cache = {}
+            self._clientMapNames = cache
+        end
+        local known = cache[mapId]
+        if known == nil then
+            local ok, info = pcall(C_Map.GetMapInfo, mapId)
+            known = false
+            if ok and type(info) == "table" and type(info.name) == "string" and info.name ~= "" then
+                known = info.name
+            end
+            cache[mapId] = known
+        end
+        if known then
+            return known
+        end
+    end
+    local L10N = GQ.L10N
+    if type(name) == "string" and name ~= "" and L10N and L10N.ZoneName then
+        return L10N.ZoneName(name)
+    end
+    return name
+end
+
+-- name is an English data zone (entry.zone, spot.map), zone the client's text.
+function GQ.Log:DataZoneIs(name, mapId, zone)
+    if self:ZoneNamesMatch(name, zone) then
+        return true
+    end
+    local client = self:ClientZoneName(name, mapId)
+    return client ~= name and self:ZoneNamesMatch(client, zone) or false
 end
 
 -- A hunt can be finished here when its zone, or any spot this faction can
@@ -2761,13 +2822,14 @@ function GQ.Log:EntryInPlayerZone(entry)
         end
         return ok
     end
-    if self:ZoneNamesMatch(entry.zone, zone) then
+    if self:DataZoneIs(entry.zone, nil, zone) then
         return remember(true)
     end
     local spots = GQ.Data and GQ.Data.VisibleCoordinateSpots and itemId and GQ.Data:VisibleCoordinateSpots(itemId)
     if spots then
         for i = 1, #spots do
-            if self:ZoneNamesMatch(spots[i].map, zone) then
+            local spot = spots[i]
+            if self:DataZoneIs(spot.map, spot.mapId, zone) then
                 return remember(true)
             end
         end
@@ -3082,6 +3144,13 @@ function GQ.Log:FactionStandingId(standings, faction)
     if not standings or type(faction) ~= "string" or faction == "" then
         return nil
     end
+    -- The client names factions in its own language and the data in English,
+    -- so the faction ID is tried first. The name match below is the fallback.
+    local L10N = GQ.L10N
+    local factionId = L10N and L10N.FactionId and L10N.FactionId(faction)
+    if factionId and standings[factionId] then
+        return standings[factionId]
+    end
     local have = standings[faction] or standings[string.lower(faction)]
     if have then
         return have
@@ -3098,16 +3167,24 @@ function GQ.Log:ReputationRequirementLine(faction, standing)
     local need = self:RepRank(standing)
     local standings = self:PlayerFactionStandings()
     local standingText = GQ.RuLabel("repStanding", standing)
+    -- Display only: the client's own faction name. Lookups use the English one.
+    local function factionText()
+        local L10N = GQ.L10N
+        if type(faction) == "string" and faction ~= "" and L10N and L10N.FactionName then
+            return L10N.FactionName(faction)
+        end
+        return faction
+    end
     -- A failed read is not the same as a faction this character has never seen.
     if not standings then
-        return string.format("\nТребуется репутация «%s» у фракции %s.", standingText, faction)
+        return string.format("\nТребуется репутация «%s» у фракции %s.", standingText, factionText())
     end
     local have = self:FactionStandingId(standings, faction)
     if not have then
         return string.format(
             "\nТребуется репутация «%s» у фракции %s. |cff6e1212Вы ещё не встречали эту фракцию.|r",
             standingText,
-            faction
+            factionText()
         )
     end
     local haveName = GQ.RuLabel("repStanding", self:RepStandingName(have)) or "Неизвестно"
@@ -3116,7 +3193,7 @@ function GQ.Log:ReputationRequirementLine(faction, standing)
     return string.format(
         "\nТребуется репутация «%s» у фракции %s. %sВаша репутация: %s.|r",
         standingText,
-        faction,
+        factionText(),
         color,
         haveName
     )
@@ -3125,7 +3202,7 @@ end
 function GQ.Log:ReadFactionStandings()
     -- This character's reputation panel only. Nothing here is saved or shared.
     local ranks = {}
-    local function note(name, standingId, isHeader, hasRep)
+    local function note(name, standingId, isHeader, hasRep, factionId)
         if issecretvalue and (issecretvalue(name) or issecretvalue(standingId) or issecretvalue(isHeader)) then
             return
         end
@@ -3146,6 +3223,14 @@ function GQ.Log:ReadFactionStandings()
         ranks[key] = standingId
         local bare = string.gsub(key, "^the ", "")
         ranks[bare] = standingId
+        -- Names come back in the client's language; the faction ID (a number
+        -- key, apart from the name keys) is what FactionStandingId tries first.
+        if factionId ~= nil and not (issecretvalue and issecretvalue(factionId)) then
+            factionId = tonumber(factionId)
+            if factionId and factionId > 0 then
+                ranks[factionId] = standingId
+            end
+        end
     end
 
     local cRep = C_Reputation
@@ -3179,7 +3264,7 @@ function GQ.Log:ReadFactionStandings()
             for i = 1, count do
                 local okRow, data = pcall(cRep.GetFactionDataByIndex, i)
                 if okRow and type(data) == "table" then
-                    note(data.name, data.reaction, data.isHeader, data.isHeaderWithRep)
+                    note(data.name, data.reaction, data.isHeader, data.isHeaderWithRep, data.factionID)
                 end
             end
         end
@@ -3228,8 +3313,11 @@ function GQ.Log:ReadFactionStandings()
         end
     end
     for i = 1, GetNumFactions() do
-        local name, _, standingId, _, _, _, _, _, isHeader, _, hasRep = GetFactionInfo(i)
-        note(name, standingId, isHeader, hasRep)
+        -- returns: name, description, standingID, barMin, barMax, barValue,
+        -- atWarWith, canToggleAtWar, isHeader, isCollapsed, hasRep, isWatched,
+        -- isChild, factionID
+        local name, _, standingId, _, _, _, _, _, isHeader, _, hasRep, _, _, factionId = GetFactionInfo(i)
+        note(name, standingId, isHeader, hasRep, factionId)
     end
     if CollapseFactionHeader then
         for n = #opened, 1, -1 do
@@ -4593,6 +4681,35 @@ function GQ.Log:RecordCraftedItem(itemId)
     return true
 end
 
+-- Fixed starts of the local player's loot and craft chat lines: the client's
+-- GlobalStrings up to the first %s ("Ваша добыча: " on ruRU). Party loot
+-- lines start with the looter's name, so they never match.
+function GQ.Log:OwnItemChatPrefixes()
+    local list = self._ownItemChatPrefixes
+    if list then
+        return list
+    end
+    list = {}
+    local keys = {
+        "LOOT_ITEM_CREATED_SELF", "LOOT_ITEM_CREATED_SELF_MULTIPLE",
+        "LOOT_ITEM_SELF", "LOOT_ITEM_SELF_MULTIPLE",
+        "LOOT_ITEM_PUSHED_SELF", "LOOT_ITEM_PUSHED_SELF_MULTIPLE",
+    }
+    local seen = {}
+    for i = 1, #keys do
+        local fmt = _G[keys[i]]
+        local prefix = type(fmt) == "string" and fmt:match("^(.-)%%s")
+        if prefix and prefix ~= "" and not seen[prefix] then
+            seen[prefix] = true
+            list[#list + 1] = prefix
+        end
+    end
+    if #list > 0 then
+        self._ownItemChatPrefixes = list
+    end
+    return list
+end
+
 function GQ.Log:HandleCraftChatMessage(msg)
     local itemId = ExtractItemIdFromChatMessage(msg)
     if not itemId then
@@ -4709,6 +4826,21 @@ function GQ.Log:ObtainToastTitle(entry)
     return "|cffffd200Цель получена|r"
 end
 
+-- Display-only item name: the client's full localized name (with its own
+-- random suffix) when GQ.Data has it, else GetEntryDisplayName. Never a key:
+-- matching and de-duplication keep using GetEntryDisplayName.
+function GQ.Log:EntryShowName(entry)
+    local data = GQ.Data
+    if not entry or not data then
+        return nil
+    end
+    local name = data.GetEntryShowName and data:GetEntryShowName(entry)
+    if type(name) ~= "string" or name == "" then
+        name = data.GetEntryDisplayName and data:GetEntryDisplayName(entry)
+    end
+    return name
+end
+
 function GQ.Log:AnnounceObtained(entry)
     if not entry or not self.obtainToastsEnabled then
         return
@@ -4717,8 +4849,7 @@ function GQ.Log:AnnounceObtained(entry)
     if GQ.Toast and not (settings and settings.hideObtainToast) then
         GQ.Toast:ShowForEntry(entry)
     end
-    local itemName = (GQ.Data and GQ.Data.GetEntryDisplayName and GQ.Data:GetEntryDisplayName(entry))
-        or ("Предмет " .. tostring(entry.itemId))
+    local itemName = self:EntryShowName(entry) or ("Предмет " .. tostring(entry.itemId))
     if entry.sourceType == "profession" then
         GQ:Chat("|cff66ccffGearQuest|r: Выполнено — изготовлено: " .. itemName .. ".")
     else
@@ -4839,10 +4970,27 @@ function GQ.Log:MarkEntryObtained(entry, options)
             loginKey = fullName:lower()
         end
     end
+    -- UnionOwnedAtLogin also files a random-suffix item under its link's
+    -- suffix ID (the EntryListKey shape), which works when the client's
+    -- item name is not English.
+    local listKey = entry.suffix and entry.suffix ~= "" and GQ.Data.EntryListKey and GQ.Data:EntryListKey(entry)
+    -- GQ.Data:EntrySuffixMatchesLink takes any roll with the client's name of
+    -- the target roll, and on other clients that name is not loginKey above
+    -- (client base name + English suffix). Its folded form is the key
+    -- UnionOwnedAtLogin files the link name under.
+    local clientKey
+    if entry.suffix and entry.suffix ~= "" and GQ.Data.SuffixTargetClientName then
+        local okName, clientName = pcall(GQ.Data.SuffixTargetClientName, GQ.Data, entry)
+        if okName and type(clientName) == "string" and clientName ~= "" then
+            clientKey = (GQ.LowerUTF8 or string.lower)(clientName)
+        end
+    end
     local alreadyHadItem = self:HasObtainedItemId(loginKey)
         or (entry.suffix and entry.suffix ~= "" and GQ.Data.EntryListKey and self:HasObtainedItemId(GQ.Data:EntryListKey(entry)))
         or (not entry.suffix or entry.suffix == "") and self:HasObtainedItemId(entry.itemId)
         or (loginKey and self.ownedAtLogin and self.ownedAtLogin[loginKey])
+        or (listKey and self.ownedAtLogin and self.ownedAtLogin[listKey])
+        or (clientKey and self.ownedAtLogin and self.ownedAtLogin[clientKey])
     self:RememberObtainedEntry(entry, now)
 
     -- Once per item, the first time it is in bags or on the character.
@@ -5352,9 +5500,19 @@ function GQ.Log:UnionOwnedAtLogin()
         if not id then
             return
         end
-        local fullName = GQ.Data and GQ.Data.ItemLinkFullName and GQ.Data:ItemLinkFullName(link)
-        if fullName and fullName:lower():find(" of ", 1, true) then
-            self.ownedAtLogin[fullName:lower()] = true
+        -- A random-suffix item is known by the suffix ID in its link; the
+        -- English " of " in the name is not there on other clients. Its key
+        -- has the shape of GQ.Data:EntryListKey for an entry with suffixId;
+        -- the lowercased full name stays for entries without one.
+        local suffixId = GQ.Data and GQ.Data.SuffixIdFromLink and GQ.Data:SuffixIdFromLink(link)
+        if suffixId then
+            self.ownedAtLogin[id .. "\0" .. tostring(suffixId)] = true
+            local fullName = GQ.Data.ItemLinkFullName and GQ.Data:ItemLinkFullName(link)
+            if fullName then
+                -- Same as fullName:lower() for an English name; GQ.LowerUTF8
+                -- also folds a Russian one (MarkEntryObtained's clientKey).
+                self.ownedAtLogin[(GQ.LowerUTF8 or string.lower)(fullName)] = true
+            end
         else
             self.ownedAtLogin[id] = true
         end
@@ -5515,7 +5673,7 @@ function GQ.Log:UpdateDetailReward(entryOrItemId)
     icon.itemId = itemId
     icon.entry = entry
 
-    local itemName = (entry and GQ.Data:GetEntryDisplayName(entry))
+    local itemName = (entry and self:EntryShowName(entry))
         or (GQ.Data and GQ.Data.GetItemDisplayName and GQ.Data:GetItemDisplayName(itemId))
         or ("Предмет " .. itemId)
     local nameR, nameG, nameB = 1, 1, 1
@@ -6602,7 +6760,8 @@ function GQ.Log:EnsureGearScoreBar(frame)
         local hex = string.format("%02x%02x%02x", (r or 1) * 255, (g or 1) * 255, (b or 1) * 255)
         GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
         GameTooltip:SetText("Оценка GearQuest", 1, 0.82, 0)
-        GameTooltip:AddLine(string.format("%d / 100 · |cff%s%s|r", shown, hex, word), 1, 1, 1)
+        -- "—", not "·": the Russian client's tooltip font (FRIZQT___CYR.TTF) has no middle dot.
+        GameTooltip:AddLine(string.format("%d / 100 — |cff%s%s|r", shown, hex, word), 1, 1, 1)
         GameTooltip:AddLine("Средний индекс GearQuest надетого на вас снаряжения.", 0.9, 0.9, 0.9, true)
         local worn = self.rows
         if worn and #worn > 0 then
@@ -9208,7 +9367,8 @@ function GQ.Log:PopulateDungeonBranch(menu)
         end
         self:AnchorBranchCheck(branch, row, i)
         row.dungeonName = name
-        row.label:SetText(name == "Other" and "Другое" or name)
+        -- Label only: the client's own instance name. dungeonName stays the key.
+        row.label:SetText(name == "Other" and "Другое" or self:ClientZoneName(name))
         row:SetChecked(not hidden[name])
         row:SetHitRectInsets(0, -((row.label:GetStringWidth() or 90) + 8), -2, -2)
         row:Show()
@@ -9387,7 +9547,8 @@ function GQ.Log:PopulateTrashBranch(menu)
         end
         self:AnchorBranchCheck(branch, row, i)
         row.dungeonName = name
-        row.label:SetText(name == "Other" and "Другое" or name)
+        -- Label only: the client's own instance name. dungeonName stays the key.
+        row.label:SetText(name == "Other" and "Другое" or self:ClientZoneName(name))
         row:SetChecked(not hidden[name])
         row:SetHitRectInsets(0, -((row.label:GetStringWidth() or 90) + 8), -2, -2)
         row:Show()
@@ -12638,7 +12799,7 @@ function GQ.Log:ConfigureRow(row, yOffset, rowType, slotName, entry, label, hand
         row.highlight:Hide()
         row:SetScript("OnClick", nil)
     elseif rowType == "notable" then
-        local name = GQ.Data:GetEntryDisplayName(entry) or ("Предмет " .. entry.itemId)
+        local name = self:EntryShowName(entry) or ("Предмет " .. entry.itemId)
         PrimeListEntryItemInfo(entry)
         local r, g, b = GetListItemQualityColor(entry.itemId)
         local status = GetHuntStatus(entry.id)
@@ -12672,7 +12833,7 @@ function GQ.Log:ConfigureRow(row, yOffset, rowType, slotName, entry, label, hand
             end
         end)
     else
-        local name = tostring(GQ.Data:GetEntryDisplayName(entry) or ("Предмет " .. tostring(entry.itemId)))
+        local name = tostring(self:EntryShowName(entry) or ("Предмет " .. tostring(entry.itemId)))
         PrimeListEntryItemInfo(entry)
         local r, g, b = GetListItemQualityColor(entry.itemId)
         local status = GetHuntStatus(entry.id)
@@ -12775,22 +12936,140 @@ function GQ.Log:ProfessionSkillLine(profession, skill)
     return string.format("Для изготовления требуется: %s (%d).%s", professionText, skill, yours)
 end
 
+-- Russian for `shown`, the displayed part of the stored English text `raw`:
+-- raw itself, or what is left of it after its first sentence was cut (the
+-- seller sentence replaced by the map pin) or after the cost sentence was
+-- stripped. Only whole stored strings are GQ.L10N keys, so a part is cut from
+-- the translation of the whole string at the same sentence break (the first
+-- ". "). Text that cannot be matched is returned as it is.
+function GQ.Log:DataTextPart(raw, shown)
+    local L10N = GQ.L10N
+    if type(shown) ~= "string" or shown == "" or not (L10N and L10N.Text) then
+        return shown
+    end
+    if shown == raw or (L10N.Has and L10N:Has(shown)) then
+        return L10N:Text(shown)
+    end
+    local ru = type(raw) == "string" and type(L10N.text) == "table" and L10N.text[raw]
+    if type(ru) == "string" then
+        local head, tail = raw:match("^(.-%.)%s+(.+)$")
+        local ruHead, ruTail = ru:match("^(.-%.)%s+(.+)$")
+        if head and ruHead then
+            if shown == tail then
+                return L10N:Text(ruTail)
+            elseif shown == head then
+                return L10N:Text(ruHead)
+            end
+        end
+    end
+    return L10N:Text(shown)
+end
+
+-- Display text of a GQ.Data:VendorBoughtLine line: its Russian seller part
+-- and the stored English tail in Russian. strip drops the generic cost
+-- sentence from the tail first, as the detail panel does when it shows the
+-- exact price. prefix/rest are VendorBoughtLine's extra returns; without them
+-- the tail is cut from raw the way VendorBoughtLine cuts it. nil when the line
+-- does not split that way (the caller keeps its English line).
+function GQ.Log:VendorLineText(raw, line, prefix, rest, strip)
+    if type(line) ~= "string" or line == "" then
+        return nil
+    end
+    local split = type(prefix) == "string" and prefix ~= "" and type(rest) == "string"
+        and (line == prefix .. " " .. rest or (rest == "" and line == prefix))
+    if not split then
+        rest = type(raw) == "string"
+            and (raw:match("^Bought from .-%.%s*(.*)$") or raw:match("^Продаётся у .-%.%s*(.*)$")) or ""
+        if rest == "" then
+            prefix = line
+        elseif #line > #rest + 1 and line:sub(-(#rest + 1)) == " " .. rest then
+            prefix = line:sub(1, #line - #rest - 1)
+        else
+            return nil
+        end
+    end
+    local tail = rest
+    if strip and tail ~= "" and GQ.Data and GQ.Data.StripGenericVendorCost then
+        tail = GQ.Data:StripGenericVendorCost(tail) or ""
+    end
+    if tail == "" then
+        return prefix
+    end
+    return prefix .. " " .. self:DataTextPart(raw, tail)
+end
+
+-- Display only: the client's (localized) title of a quest, by the quest ID
+-- when the data has one, else through the GQ.L10N id table; the stored
+-- English name when the client does not know the quest yet.
+function GQ.Log:QuestTitle(questId, name)
+    questId = tonumber(questId)
+    if questId and C_QuestLog then
+        local title
+        if C_QuestLog.GetTitleForQuestID then
+            local ok, t = pcall(C_QuestLog.GetTitleForQuestID, questId)
+            if ok and type(t) == "string" and t ~= "" then
+                title = t
+            end
+        end
+        if not title and C_QuestLog.GetQuestInfo then
+            local ok, t = pcall(C_QuestLog.GetQuestInfo, questId)
+            if ok and type(t) == "string" and t ~= "" then
+                title = t
+            end
+        end
+        if title then
+            return title
+        end
+        -- Once per quest and session, as GQ.L10N.QuestName does: this runs on
+        -- every rebuild of the detail panel (selection, zone change, item
+        -- data), and a quest the server never answers for would be asked for
+        -- again each time.
+        if C_QuestLog.RequestLoadQuestByID then
+            local asked = self._questTitleAsked
+            if not asked then
+                asked = {}
+                self._questTitleAsked = asked
+            end
+            if not asked[questId] then
+                asked[questId] = true
+                pcall(C_QuestLog.RequestLoadQuestByID, questId)
+            end
+        end
+    end
+    local L10N = GQ.L10N
+    if type(name) == "string" and name ~= "" and L10N and L10N.QuestName then
+        return L10N.QuestName(name)
+    end
+    return name
+end
+
 function GQ.Log:BuildDetailLines(entry)
     if entry and entry.sourceType == "profession" and GQ.Data and GQ.Data.EnrichProfessionEntry then
         GQ.Data:EnrichProfessionEntry(entry)
     end
 
+    -- Every English check below reads the stored English text (pattern
+    -- sentence, auction, zone/quest/NPC mentions, vendor cost strip). The
+    -- intro is put into Russian once at the end; names where they are shown.
+    local L10N = GQ.L10N
     local intro
-    local vendorLine
+    local vendorLine, vendorPrefix, vendorRest
+    -- introRaw: the stored instructions (the GQ.L10N key); introLead: the
+    -- Russian pattern sentence put before them.
+    local introRaw, introLead
     if entry and entry.sourceType == "profession" and GQ.Data and GQ.Data.GetProfessionInstructions then
+        -- Display text from Data.lua, which owns translating its English tail.
         intro = GQ.Data:GetProfessionInstructions(entry) or ""
     else
-        vendorLine = GQ.Data and GQ.Data.VendorBoughtLine and GQ.Data:VendorBoughtLine(entry)
+        if GQ.Data and GQ.Data.VendorBoughtLine then
+            vendorLine, vendorPrefix, vendorRest = GQ.Data:VendorBoughtLine(entry)
+        end
+        introRaw = (GQ.Data and GQ.Data.GetEntryInstructions and GQ.Data:GetEntryInstructions(entry))
+            or (entry and entry.instructions)
         if vendorLine and vendorLine ~= "" then
             intro = vendorLine
         else
-            intro = (GQ.Data and GQ.Data.GetEntryInstructions and GQ.Data:GetEntryInstructions(entry))
-                or (entry and entry.instructions)
+            intro = introRaw
         end
     end
     local patternProf, patternSkill = nil, nil
@@ -12802,11 +13081,15 @@ function GQ.Log:BuildDetailLines(entry)
         and not intro:find("pattern is dropped", 1, true) then
         -- The English checks above read the stored data text. The added
         -- sentence is Russian and keeps the stored source text after it.
-        intro = "Выпадает рецепт (" .. GQ.RuLabel("profession", patternProf) .. "), а не сам предмет. " .. intro
+        introLead = "Выпадает рецепт (" .. GQ.RuLabel("profession", patternProf) .. "), а не сам предмет. "
+        intro = introLead .. intro
     end
     local lines = {}
+    -- 1 while lines[1] is the intro; the vendor cost strip below may drop it.
+    local introAt
     if intro and intro ~= "" then
         lines[1] = intro
+        introAt = 1
     end
 
     local audit = GQ.Data and GQ.Data.GetForeverAudit and GQ.Data:GetForeverAudit(entry.itemId)
@@ -12829,7 +13112,8 @@ function GQ.Log:BuildDetailLines(entry)
     end
 
     if entry.proc then
-        table.insert(lines, "\nЧем хорош: " .. entry.proc)
+        local procText = (L10N and L10N.Text and L10N:Text(entry.proc)) or entry.proc
+        table.insert(lines, "\nЧем хорош: " .. procText)
     end
 
     if GQ.Data:ShouldDisplayAsNotable(entry, entry and entry.slot) and entry.proc then
@@ -12884,14 +13168,18 @@ function GQ.Log:BuildDetailLines(entry)
             end
         end
         if not hideCatalogZone then
-            table.insert(lines, "\nЗона: " .. zoneName)
+            local zoneText = (L10N and L10N.ZoneName and L10N.ZoneName(zoneName)) or zoneName
+            table.insert(lines, "\nЗона: " .. zoneText)
         end
     end
     if entry.questName and not alreadySays(entry.questName) then
-        table.insert(lines, "Задание: " .. entry.questName)
+        local questText = (L10N and L10N.QuestName and L10N.QuestName(entry.questName)) or entry.questName
+        table.insert(lines, "Задание: " .. questText)
     end
     if entry.npc and not vendorLine and not alreadySays(entry.npc) then
-        table.insert(lines, "NPC: " .. entry.npc)
+        -- the name stands alone here, so the nominative Russian name fits
+        local npcText = GQ.L10N and GQ.L10N.NpcName and GQ.L10N.NpcName(entry.npc) or entry.npc
+        table.insert(lines, "NPC: " .. npcText)
     end
 
     -- The tooltip stays the Wowhead tip. How an imbued weapon is made lives
@@ -12940,12 +13228,14 @@ function GQ.Log:BuildDetailLines(entry)
                         known = true
                         done = completedMap[questId] and true or false
                     end
+                    -- Display only: QuestChainSteps picked this chain by the English names.
+                    local shownName = self:QuestTitle(questId, questName)
                     if known and done then
-                        table.insert(lines, questName .. " - |cff0c4a1cвыполнено|r")
+                        table.insert(lines, shownName .. " - |cff0c4a1cвыполнено|r")
                     elseif known then
-                        table.insert(lines, questName .. " - ещё не выполнено")
+                        table.insert(lines, shownName .. " - ещё не выполнено")
                     else
-                        table.insert(lines, questName)
+                        table.insert(lines, shownName)
                     end
                 end
             end
@@ -12999,6 +13289,7 @@ function GQ.Log:BuildDetailLines(entry)
         self:AppendDungeonEntryLine(lines, entry)
     end
 
+    local costStripped = false
     if src == "vendor" and GQ.Data and GQ.Data.VendorCostLine then
         local costLine = GQ.Data:VendorCostLine(entry)
         if costLine then
@@ -13008,9 +13299,29 @@ function GQ.Log:BuildDetailLines(entry)
                     lines[1] = stripped
                 else
                     table.remove(lines, 1)
+                    introAt = nil
                 end
+                costStripped = true
             end
             table.insert(lines, costLine)
+        end
+    end
+
+    -- The English checks on the intro are done: show it in Russian. Only
+    -- whole stored strings are GQ.L10N keys, so the raw instructions are
+    -- looked up and the Russian lead sentences stay outside the lookup.
+    if introAt == 1 and lines[1] then
+        if vendorLine and vendorLine ~= "" then
+            local shown = self:VendorLineText(introRaw, vendorLine, vendorPrefix, vendorRest, costStripped)
+            if shown then
+                lines[1] = (introLead or "") .. shown
+            end
+        elseif type(introRaw) == "string" and introRaw ~= "" then
+            local english, lead = lines[1], ""
+            if introLead and english:sub(1, #introLead) == introLead then
+                english, lead = english:sub(#introLead + 1), introLead
+            end
+            lines[1] = lead .. self:DataTextPart(introRaw, english)
         end
     end
 
@@ -13466,7 +13777,7 @@ function GQ.Log:ShowSlotRankTooltip(row)
     else
         for i = 1, #entries do
             local entry = entries[i]
-            local name = GQ.Data:GetEntryDisplayName(entry) or ("Предмет " .. tostring(entry.itemId))
+            local name = self:EntryShowName(entry) or ("Предмет " .. tostring(entry.itemId))
             local r, g, b = GetListItemQualityColor(entry.itemId)
             local color = string.format("|cff%02x%02x%02x", math.floor(r * 255 + 0.5), math.floor(g * 255 + 0.5), math.floor(b * 255 + 0.5))
             local place = i
@@ -13644,14 +13955,9 @@ function GQ.Log:ShowCoordinateTooltip(button)
     end
     for i = 1, limit do
         local spot = spots[i]
-        -- Display only: the client's own name for this map when it knows the id.
-        local mapName = spot.map or ""
-        if spot.mapId and C_Map and C_Map.GetMapInfo then
-            local ok, info = pcall(C_Map.GetMapInfo, spot.mapId)
-            if ok and type(info) == "table" and type(info.name) == "string" and info.name ~= "" then
-                mapName = info.name
-            end
-        end
+        -- Display only: the client's own name for this map, by its id or
+        -- through the GQ.L10N id tables; the stored English name otherwise.
+        local mapName = self:ClientZoneName(spot.map, spot.mapId) or spot.map or ""
         GameTooltip:AddLine(string.format("%s %.1f, %.1f", mapName, spot.x or 0, spot.y or 0), 1, 1, 1, true)
     end
     if #spots > 10 then
@@ -13856,7 +14162,7 @@ function GQ.Log:ApplyEntryDetail(entry)
 
     self:EnsureDetailLore(self.frame)
 
-    local itemName = GQ.Data:GetEntryDisplayName(entry) or ("Предмет " .. entry.itemId)
+    local itemName = self:EntryShowName(entry) or ("Предмет " .. entry.itemId)
 
     self:SetDetailEmpty(false)
     if entry.itemId and GQ.Data and GQ.Data.RequestItemInfo and GQ.Data.IsClientItemMissing
@@ -13876,7 +14182,11 @@ function GQ.Log:ApplyEntryDetail(entry)
     local lore = entry.lore
     if self.frame.detailLore then
         if lore and lore ~= "" then
-            self.frame.detailLore:SetText(GQ.Data:SanitizeText(lore) or lore)
+            -- The stored English text is the GQ.L10N key: look it up before
+            -- SanitizeText changes it.
+            local L10N = GQ.L10N
+            local loreText = (L10N and L10N.Text and L10N:Text(lore)) or lore
+            self.frame.detailLore:SetText(GQ.Data:SanitizeText(loreText) or loreText)
             self.frame.detailLore:Show()
             self.frame.detailHeader:ClearAllPoints()
             self.frame.detailHeader:SetPoint("TOPLEFT", self.frame.detailLore, "BOTTOMLEFT", 0, -12)
@@ -15483,11 +15793,12 @@ function GQ.Log:StepLookupIndex()
             local row = items[key]
             if not row then
                 local name = self:LookupDisplayName(entry)
+                -- string.lower leaves Cyrillic as is; the query is folded the same way.
                 row = {
                     key = key,
                     itemId = entry.itemId,
                     name = name,
-                    nameLower = string.lower(name),
+                    nameLower = (GQ.LowerUTF8 or string.lower)(name),
                     entries = {},
                 }
                 items[key] = row
@@ -15540,6 +15851,48 @@ function GQ.Log:LookupDetailEntry(item)
         end
     end
     return best
+end
+
+-- Display-only name of a lookup row. item.name / item.nameLower stay the
+-- English search and sort keys.
+function GQ.Log:LookupShowName(item, entry)
+    entry = entry or self:LookupDetailEntry(item)
+    local shown = entry and self:EntryShowName(entry)
+    if type(shown) ~= "string" or shown == "" or shown:find("^Item %d+$") then
+        shown = item and item.name
+    end
+    return shown
+end
+
+-- Second search key of a lookup row: the client's own item name, folded with
+-- GQ.LowerUTF8 like the query. Read only for items the client already has
+-- (GQ.Equip:IsItemDataCached): asking the server for the whole catalog at
+-- once stalls the frame. false = same as the English name, nothing to add.
+function GQ.Log:LookupClientKey(item)
+    if not item or not item.itemId then
+        return nil
+    end
+    if item.clientLower ~= nil then
+        return item.clientLower or nil
+    end
+    if not (GQ.Equip and GQ.Equip.IsItemDataCached and GQ.Equip:IsItemDataCached(item.itemId)) or not GetItemInfo then
+        return nil
+    end
+    local ok, name = pcall(GetItemInfo, item.itemId)
+    if not ok or type(name) ~= "string" or name == ""
+        or (GQ.Data and GQ.Data.IsPlaceholderItemName and GQ.Data:IsPlaceholderItemName(name, item.itemId)) then
+        return nil
+    end
+    local lower = (GQ.LowerUTF8 or string.lower)(name)
+    local english = item.nameLower or ""
+    -- The client name of a random-suffix item is its base name, the start
+    -- of the English row name.
+    if lower == english or english:sub(1, #lower + 1) == lower .. " " then
+        item.clientLower = false
+        return nil
+    end
+    item.clientLower = lower
+    return lower
 end
 
 function GQ.Log:LookupRankLines(item, classFile)
@@ -15667,7 +16020,7 @@ function GQ.Log:ShowLookupRankTooltip(button, item)
     local lines = self:LookupRankLines(item, classFile)
     GameTooltip:SetOwner(button, "ANCHOR_RIGHT")
     GameTooltip:ClearLines()
-    GameTooltip:SetText(item.name or "Предмет", 1, 0.82, 0)
+    GameTooltip:SetText(self:LookupShowName(item) or "Предмет", 1, 0.82, 0)
     local entry = item.entries and item.entries[1]
     if entry and entry.slot and GQ.Data and GQ.Data.SlotHeaderLabel then
         GameTooltip:AddLine(GQ.Data:SlotHeaderLabel(entry.slot), 0.8, 0.8, 0.8, true)
@@ -16046,7 +16399,7 @@ function GQ.Log:PaintLookupRows()
                 row.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
             end
             local r, g, b = GetListItemQualityColor(item.itemId)
-            row.text:SetText(item.name or "")
+            row.text:SetText(self:LookupShowName(item, row.entry) or "")
             row.text:SetTextColor(r, g, b)
             if item.key == self.lookupItemKey then
                 row.highlight:Show()
@@ -16075,16 +16428,27 @@ function GQ.Log:ApplyLookupHits(classFile, query)
     local hits = {}
     if query ~= "" then
         local index = self._lookupIndex or {}
+        local function rankOf(name)
+            if name == query then
+                return 0
+            elseif name:sub(1, #query) == query then
+                return 1
+            elseif name:find(query, 1, true) then
+                return 2
+            end
+            return nil
+        end
         for i = 1, #index do
             local item = index[i]
-            local name = item.nameLower or ""
-            local rank
-            if name == query then
-                rank = 0
-            elseif name:sub(1, #query) == query then
-                rank = 1
-            elseif name:find(query, 1, true) then
-                rank = 2
+            local rank = rankOf(item.nameLower or "")
+            -- The player types the names the client shows: its own item name
+            -- is a second key. nameLower stays the sort key.
+            local client = self:LookupClientKey(item)
+            if client then
+                local clientRank = rankOf(client)
+                if clientRank and (not rank or clientRank < rank) then
+                    rank = clientRank
+                end
             end
             if rank then
                 hits[#hits + 1] = { item = item, rank = rank }
@@ -16129,7 +16493,8 @@ function GQ.Log:RunLookup()
     end
     local _, classFile = self:LookupClassName()
     local query = self.frame.lookupBox:GetText() or ""
-    query = string.lower((strtrim and strtrim(query)) or query:gsub("^%s+", ""):gsub("%s+$", ""))
+    -- Folded like the index keys: string.lower leaves Cyrillic as is.
+    query = (GQ.LowerUTF8 or string.lower)((strtrim and strtrim(query)) or query:gsub("^%s+", ""):gsub("%s+$", ""))
     self._lookupSerial = (self._lookupSerial or 0) + 1
     local serial = self._lookupSerial
     if query == "" then

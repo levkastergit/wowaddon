@@ -7,6 +7,20 @@ local zoneCache = {}
 
 local ZONE_MAP = Enum and Enum.UIMapType and Enum.UIMapType.Zone or 3
 
+-- English zone name -> uiMapID from the hunt coordinates (spot.map with
+-- spot.mapId), built once on first use.
+local dataMapIds
+
+-- Continents the data names (entry.zone, a few spots) that neither table
+-- covers. UiMap.db2 of WoW Forever 1.60.1.70790 (wago.tools): 1414 Kalimdor,
+-- 1415 Eastern Kingdoms, Type 2 = Continent. The only other rows with these
+-- names are their Taxi-system twins 1464/1463, which the name scan reaches
+-- later and picks only if they score higher.
+local CONTINENT_MAP_IDS = {
+    ["Kalimdor"] = 1414,
+    ["Eastern Kingdoms"] = 1415,
+}
+
 local function MapAcceptsWorld(mapId)
     if not (mapId and C_Map and C_Map.GetWorldPosFromMapPos and CreateVector2D) then
         return true
@@ -15,15 +29,59 @@ local function MapAcceptsWorld(mapId)
     return ok and continent and world and true or false
 end
 
+-- One pass over every spot (about 65,000), so it reads plain fields only.
+-- The id most spots of a zone carry wins; a tie takes the lower id.
+local function BuildDataMapIds(rows)
+    local counts = {}
+    for _, row in pairs(rows) do
+        local spots = row.spots
+        if spots then
+            for i = 1, #spots do
+                local spot = spots[i]
+                local id = spot.mapId
+                local name = id and spot.map
+                if name then
+                    local byId = counts[name]
+                    if not byId then
+                        byId = {}
+                        counts[name] = byId
+                    end
+                    byId[id] = (byId[id] or 0) + 1
+                end
+            end
+        end
+    end
+    local ids = {}
+    for name, byId in pairs(counts) do
+        local best, bestCount
+        for id, n in pairs(byId) do
+            if not bestCount or n > bestCount or (n == bestCount and id < best) then
+                best, bestCount = id, n
+            end
+        end
+        ids[name] = best
+    end
+    return ids
+end
+
+local function DataMapId(zoneName)
+    if not dataMapIds then
+        local rows = GQ.Data and GQ.Data.coordinates
+        if type(rows) ~= "table" then
+            return nil
+        end
+        -- Malformed data leaves the table empty; the name scan still runs.
+        local ok, ids = pcall(BuildDataMapIds, rows)
+        dataMapIds = ok and ids or {}
+    end
+    return dataMapIds[zoneName]
+end
+
 -- The first id with this name is often a duplicate that cannot take a world
 -- position. Prefer the outdoor zone, and one the guide can measure yards on.
-local function FindMapId(zoneName)
-    if not zoneName or zoneName == "" then
-        return nil
-    end
-    if zoneCache[zoneName] ~= nil then
-        return zoneCache[zoneName] or nil
-    end
+-- The client names maps in its own language, so this only finds an English
+-- name on an English client (or a map the client leaves untranslated).
+local function ScanMapNames(zoneName)
     local found = false
     local bestScore = -1
     if C_Map and C_Map.GetMapInfo then
@@ -41,8 +99,58 @@ local function FindMapId(zoneName)
             end
         end
     end
+    return found
+end
+
+-- English data name (spot.map, entry.zone, place.zone) -> the client's
+-- uiMapID, by id tables first: GQ.L10N's zone ids, the continents, then the
+-- pairs in the coordinate data. The name scan is the last resort.
+local function FindMapId(zoneName)
+    if type(zoneName) ~= "string" or zoneName == "" then
+        return nil
+    end
+    if zoneCache[zoneName] ~= nil then
+        return zoneCache[zoneName] or nil
+    end
+    local L10N = GQ.L10N
+    local found = (L10N and L10N.ZoneMapId and L10N.ZoneMapId(zoneName))
+        or CONTINENT_MAP_IDS[zoneName]
+        or DataMapId(zoneName)
+        or ScanMapNames(zoneName)
+        or false
     zoneCache[zoneName] = found
     return found or nil
+end
+
+-- Display only: the client's name for an English zone name from the data
+-- (GQ.L10N), or the name unchanged. Never feed the result back to ZoneMap.
+local function ZoneText(name)
+    local L10N = GQ.L10N
+    if type(name) == "string" and name ~= "" and L10N and L10N.ZoneName then
+        return L10N.ZoneName(name)
+    end
+    return name
+end
+
+-- TomTom title and chat text for an entry. entry.questName/npc/zone stay
+-- English; quest and zone names are shown as the client names them. NPC
+-- names have no ids and stay as stored.
+local function DisplayLabel(entry)
+    local quest = entry.questName
+    if quest then
+        local L10N = GQ.L10N
+        if type(quest) == "string" and quest ~= "" and L10N and L10N.QuestName then
+            return L10N.QuestName(quest)
+        end
+        return quest
+    end
+    if entry.npc then
+        return entry.npc
+    end
+    if entry.zone then
+        return ZoneText(entry.zone)
+    end
+    return "GearQuest"
 end
 
 function GQ.Map:ZoneMap(zoneName)
@@ -175,8 +283,9 @@ function GQ.Map:Show(entry)
         GQ.Guide:ShowEntry(entry)
     end
     local spot = self:SpotForEntry(entry)
+    -- ZoneMap gets the English entry.zone; label is display text only.
     local mapId = spot and spot.mapId or self:ZoneMap(entry.zone)
-    local label = entry.questName or entry.npc or entry.zone or "GearQuest"
+    local label = DisplayLabel(entry)
 
     OpenToMap(mapId)
 
@@ -190,6 +299,6 @@ function GQ.Map:Show(entry)
     if C_Timer and C_Timer.After then
         C_Timer.After(0, GuardWaypointClipboard)
     end
-    local where = string.format("%s %.1f, %.1f", spot.map or label, spot.x, spot.y)
+    local where = string.format("%s %.1f, %.1f", ZoneText(spot.map) or label, spot.x, spot.y)
     GQ:Chat(PREFIX .. where .. (pinned and " — метка установлена" or ""))
 end

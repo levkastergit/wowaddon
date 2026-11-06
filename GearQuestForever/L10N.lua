@@ -34,6 +34,9 @@ L.setName = L.setName or {}
 -- Russian names): set id -> { English, Russian }, and item id -> set id.
 L.setById = L.setById or {}
 L.itemSet = L.itemSet or {}
+-- English set name -> { { set id, lowest piece id, highest piece id }, ... } for those
+-- shared names, to place an item that is not a listed piece (a Forever variant id).
+L.setCand = L.setCand or {}
 
 -- Client strings are used only on a Russian client; anywhere else the Russian
 -- fallbacks below are shown, so the addon reads Russian either way.
@@ -78,8 +81,12 @@ end
 ------------------------------------------------------------------------
 
 local nameCache = {}
+local questRequested = {}
 
 local function ZoneName(en)
+    if type(en) ~= "string" or en == "" then
+        return en
+    end
     local key = "z" .. en
     if nameCache[key] then
         return nameCache[key]
@@ -108,6 +115,9 @@ local function ZoneName(en)
 end
 
 local function QuestName(en)
+    if type(en) ~= "string" or en == "" then
+        return en
+    end
     local key = "q" .. en
     if nameCache[key] then
         return nameCache[key]
@@ -127,7 +137,9 @@ local function QuestName(en)
                 name = Str(t)
             end
         end
-        if not name and C_QuestLog.RequestLoadQuestByID then
+        -- ask the client to load the quest once per session
+        if not name and C_QuestLog.RequestLoadQuestByID and not questRequested[id] then
+            questRequested[id] = true
             pcall(C_QuestLog.RequestLoadQuestByID, id)
         end
     end
@@ -141,6 +153,9 @@ local function QuestName(en)
 end
 
 local function FactionName(en)
+    if type(en) ~= "string" or en == "" then
+        return en
+    end
     local key = "f" .. en
     if nameCache[key] then
         return nameCache[key]
@@ -167,10 +182,12 @@ local function FactionName(en)
     return name or en
 end
 
-local function ItemName(en)
-    local id = L.ids.item[en]
+-- The client's name of an item id, or nil (then the item is requested, so a
+-- later look finds it).
+local function ItemNameById(id)
+    id = tonumber(id)
     if not id then
-        return en
+        return nil
     end
     local name
     if GetItemInfo then
@@ -185,7 +202,18 @@ local function ItemName(en)
     if not name and GQ.Data and GQ.Data.RequestItemInfo then
         pcall(GQ.Data.RequestItemInfo, GQ.Data, id)
     end
-    return name or en
+    return name
+end
+
+local function ItemName(en)
+    if type(en) ~= "string" or en == "" then
+        return en
+    end
+    local id = L.ids.item[en]
+    if not id then
+        return en
+    end
+    return ItemNameById(id) or en
 end
 
 -- Russian NPC name (nominative) or the English one; a comma list is mapped part by part.
@@ -416,6 +444,11 @@ local STAT_RU = {
 local SCHOOL_RU = {
     Fire = "огонь", Frost = "лёд", Nature = "природа", Shadow = "тьма", Arcane = "тайная магия", Holy = "свет",
 }
+-- the client's own school names (GlobalStrings DAMAGE_SCHOOL2..7) on a Russian client
+local SCHOOL_GLOBAL = {
+    Holy = "DAMAGE_SCHOOL2", Fire = "DAMAGE_SCHOOL3", Nature = "DAMAGE_SCHOOL4",
+    Frost = "DAMAGE_SCHOOL5", Shadow = "DAMAGE_SCHOOL6", Arcane = "DAMAGE_SCHOOL7",
+}
 
 local SLOT = {
     ["Head"] = { "INVTYPE_HEAD", "Голова" },
@@ -565,7 +598,7 @@ local function Structural(line)
     end
     local lo, hi, school = line:match("^([%d%.]+) %- ([%d%.]+) (%a+) Damage$")
     if lo and SCHOOL_RU[school] then
-        return F("Урон: %s - %s (%s)", "Урон: %s - %s (%s)", lo, hi, SCHOOL_RU[school])
+        return F("Урон: %s - %s (%s)", "Урон: %s - %s (%s)", lo, hi, G(SCHOOL_GLOBAL[school], SCHOOL_RU[school]))
     end
     lo, hi = line:match("^([%d%.]+) %- ([%d%.]+) Damage$")
     if lo then
@@ -642,9 +675,10 @@ local function Structural(line)
     if n then
         return "Ранг " .. n
     end
+    -- Wowhead lists a set piece it had no name for as "Item #<id>"
     n = line:match("^Item #?(%d+)$")
     if n then
-        return "Предмет #" .. n
+        return ItemNameById(n) or ("Предмет #" .. n)
     end
     return nil
 end
@@ -656,8 +690,26 @@ local function SetName(en, itemId)
     if ru then
         return ru
     end
-    local sid = itemId and L.itemSet[tonumber(itemId) or -1]
+    local id = tonumber(itemId)
+    if not id then
+        return nil
+    end
+    local sid = L.itemSet[id]
     local set = sid and L.setById[sid]
+    if set and set[1] == en then
+        return set[2]
+    end
+    -- not a listed piece: the set with the same English name whose piece ids
+    -- are nearest to this item's id (original sets have ids far below Forever's)
+    local best, bestDistance
+    for _, cand in ipairs(L.setCand[en] or {}) do
+        local lo, hi = cand[2], cand[3]
+        local distance = (id < lo and lo - id) or (id > hi and id - hi) or 0
+        if not bestDistance or distance < bestDistance then
+            best, bestDistance = cand[1], distance
+        end
+    end
+    set = best and L.setById[best]
     if set and set[1] == en then
         return set[2]
     end

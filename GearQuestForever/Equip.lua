@@ -5,33 +5,73 @@ GQ.Equip = GQ.Equip or {}
 -- How many levels above entry.maxLevel an item may still appear if it ranks in the top 3.
 GQ.Equip.LEVEL_GRACE = 5
 
--- English client weapon subclass -> character skill line (Classic / TBC).
+-- The client names item types and skill lines in its own language: on a
+-- Russian client GetItemInfo returns 6/7 read "Оружие"/"Мечи", and the skill
+-- list says "Мечи". The logic therefore reads the numeric ids (GetItemInfo
+-- returns 12/13, GetItemInfoInstant returns 6/7) and keeps English keys.
+-- Ids: Enum.ItemClass Weapon = 2, Armor = 4, Enum.ItemWeaponSubclass and
+-- Enum.ItemArmorSubclass in the WoW Forever client's API documentation
+-- (also warcraft.wiki.gg/wiki/ItemType).
+local ITEM_CLASS_WEAPON = 2
+local ITEM_CLASS_ARMOR = 4
+
+-- Weapon subclass id -> the skill line's English name in SkillLine.db2, which
+-- is the key GQ.L10N.SkillKey returns for the client's name in any language.
+-- One-hand skills are called "Axes", "Maces" and "Swords" there.
+local WEAPON_SKILL_BY_SUBCLASS = {
+    [0] = "Axes",
+    [1] = "Two-Handed Axes",
+    [2] = "Bows",
+    [3] = "Guns",
+    [4] = "Maces",
+    [5] = "Two-Handed Maces",
+    [6] = "Polearms",
+    [7] = "Swords",
+    [8] = "Two-Handed Swords",
+    [10] = "Staves",
+    [13] = "Fist Weapons",
+    [15] = "Daggers",
+    [18] = "Crossbows",
+    [19] = "Wands",
+}
+
+-- English client weapon subclass -> the same skill line, for a client that
+-- gives no ids.
 local WEAPON_SUBCLASS_SKILLS = {
-    ["One-Handed Axes"] = "One-Handed Axes",
+    ["One-Handed Axes"] = "Axes",
     ["Two-Handed Axes"] = "Two-Handed Axes",
     ["Bows"] = "Bows",
     ["Crossbows"] = "Crossbows",
     ["Daggers"] = "Daggers",
     ["Guns"] = "Guns",
-    ["One-Handed Maces"] = "One-Handed Maces",
+    ["One-Handed Maces"] = "Maces",
     ["Two-Handed Maces"] = "Two-Handed Maces",
     ["Polearms"] = "Polearms",
-    ["One-Handed Swords"] = "One-Handed Swords",
+    ["One-Handed Swords"] = "Swords",
     ["Two-Handed Swords"] = "Two-Handed Swords",
     ["Staves"] = "Staves",
     ["Fist Weapons"] = "Fist Weapons",
     ["Wands"] = "Wands",
 }
 
+-- skillName is an English key ("Swords"). Each client skill name goes through
+-- GQ.L10N.SkillKey first, so "Мечи" on a Russian client counts as "Swords".
 function GQ.Equip:PlayerHasSkill(skillName)
-    if not skillName or not GetNumSkillLines then
+    if not skillName or not GetNumSkillLines or not GetSkillLineInfo then
         return true
     end
 
+    local L10N = GQ.L10N
+    local skillKey = L10N and L10N.SkillKey
     for i = 1, GetNumSkillLines() do
         local name, _, _, rank = GetSkillLineInfo(i)
-        if name == skillName and rank and rank > 0 then
-            return true
+        if GQ.PublicText then
+            name = GQ.PublicText(name)
+        end
+        if name and rank and rank > 0 then
+            if name == skillName or (skillKey and skillKey(name) == skillName) then
+                return true
+            end
         end
     end
 
@@ -40,12 +80,16 @@ end
 
 function GQ.Equip:PlayerHasWeaponSkill(itemId)
     self:PrimeItem(itemId)
-    local _, _, _, _, _, class, subclass = GetItemInfo(itemId)
-    if class ~= "Weapon" or not subclass then
-        return true
+    local _, _, _, _, _, class, subclass, _, _, _, _, classID, subclassID = GetItemInfo(itemId)
+    local skillName
+    if type(classID) == "number" then
+        if classID ~= ITEM_CLASS_WEAPON then
+            return true
+        end
+        skillName = WEAPON_SKILL_BY_SUBCLASS[subclassID]
+    elseif class == "Weapon" and subclass then
+        skillName = WEAPON_SUBCLASS_SKILLS[subclass]
     end
-
-    local skillName = WEAPON_SUBCLASS_SKILLS[subclass]
     if not skillName then
         return true
     end
@@ -300,6 +344,53 @@ function GQ.Equip:GetPreferredArmorSubclass(classFile, playerLevel)
     return tier.bestBelow
 end
 
+-- Armor subclass id -> the English token the code compares (CLASS_ARMOR_TIER,
+-- ClassCanWearArmorSubclass, GQ.StatWeightsArmorClass in Compare.lua).
+local ARMOR_TOKEN_BY_SUBCLASS = {
+    [0] = "Miscellaneous",
+    [1] = "Cloth",
+    [2] = "Leather",
+    [3] = "Mail",
+    [4] = "Plate",
+    [6] = "Shield",
+    [7] = "Libram",
+    [8] = "Idol",
+    [9] = "Totem",
+}
+
+-- English armor token from the client's item class and subclass. An armor
+-- subclass outside the table keeps the client's own name, as before. Without
+-- ids only an English client's "Armor" is recognized (the old test).
+local function ArmorToken(class, subclass, classID, subclassID)
+    if type(classID) == "number" then
+        if classID ~= ITEM_CLASS_ARMOR then
+            return nil
+        end
+        return ARMOR_TOKEN_BY_SUBCLASS[subclassID] or subclass
+    end
+    if class == "Armor" then
+        return subclass
+    end
+    return nil
+end
+
+-- instantFirst: GetItemInfoInstant reads the client's own item table and needs
+-- no server query, so it answers before the item is cached. Items the client
+-- table does not have fall back to GetItemInfo.
+local function ClientArmorToken(itemId, instantFirst)
+    if instantFirst and type(GetItemInfoInstant) == "function" then
+        local ok, _, class, subclass, _, _, classID, subclassID = pcall(GetItemInfoInstant, itemId)
+        if ok and type(classID) == "number" then
+            return ArmorToken(class, subclass, classID, subclassID)
+        end
+    end
+    if type(GetItemInfo) ~= "function" then
+        return nil
+    end
+    local _, _, _, _, _, class, subclass, _, _, _, _, classID, subclassID = GetItemInfo(itemId)
+    return ArmorToken(class, subclass, classID, subclassID)
+end
+
 function GQ.Equip:GetItemArmorSubclass(itemId)
     if not itemId then
         return nil
@@ -309,12 +400,8 @@ function GQ.Equip:GetItemArmorSubclass(itemId)
     if not self:IsItemInfoLoaded(itemId) then
         return nil
     end
-    local _, _, _, _, _, class, subclass = GetItemInfo(itemId)
-    if class == "Armor" and subclass then
-        return subclass
-    end
 
-    return nil
+    return ClientArmorToken(itemId, false)
 end
 
 function GQ.Equip:MeetsArmorPreference(itemId, slotName, classFile, playerLevel)
@@ -362,12 +449,12 @@ function GQ.Equip:ClassCanWearArmorSubclass(subclass, classFile, playerLevel)
 end
 
 function GQ.Equip:PeekItemArmorSubclass(itemId)
-    if not itemId or not GetItemInfo then
+    if not itemId then
         return nil
     end
-    local _, _, _, _, _, class, subclass = GetItemInfo(itemId)
-    if class == "Armor" and subclass and subclass ~= "" then
-        return subclass
+    local token = ClientArmorToken(itemId, true)
+    if token and token ~= "" then
+        return token
     end
     return nil
 end

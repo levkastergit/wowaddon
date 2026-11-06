@@ -1432,6 +1432,11 @@ function GQ.Data:IsPlaceholderItemName(name, itemId)
     if name:find("^Item #?%d+$") then
         return true
     end
+    -- The same stub, in case a Russian client localizes it (not verified in game;
+    -- no real item is named like this), and the client's "retrieving" text.
+    if name:find("^Предмет #?%d+$") or (RETRIEVING_ITEM_INFO and name == RETRIEVING_ITEM_INFO) then
+        return true
+    end
     if itemId and name == tostring(itemId) then
         return true
     end
@@ -1488,6 +1493,82 @@ function GQ.Data:GetEntryDisplayName(entry)
     end
 
     return base
+end
+
+-- True on an English client (or when the locale is unknown). The data is
+-- English, so there the stored names are in the client's language and the
+-- original English comparisons stay exactly as they were.
+function GQ.Data:ClientIsEnglish()
+    if self._clientIsEnglish == nil then
+        local locale = type(GetLocale) == "function" and GetLocale() or nil
+        self._clientIsEnglish = locale == nil or locale == "enUS" or locale == "enGB"
+    end
+    return self._clientIsEnglish
+end
+
+-- The client's own name of the exact roll an entry hunts ("Bandit Cloak of
+-- the Monkey" on an English client, the Russian name on a Russian one), or nil
+-- while it is not cached. Forever can answer a suffix link with the plain base
+-- name; that is not the roll's name either. Reads the entry, never writes it.
+function GQ.Data:SuffixTargetClientName(entry)
+    if not entry or not entry.itemId or not entry.suffix or entry.suffix == ""
+        or not entry.suffixId or entry.suffixId == 0 or not GetItemInfo then
+        return nil
+    end
+    local link = self:MakeSuffixTargetLink(entry)
+    if not link then
+        return nil
+    end
+    local ok, name = pcall(GetItemInfo, link)
+    if not ok or type(name) ~= "string" or self:IsPlaceholderItemName(name, entry.itemId) then
+        return nil
+    end
+    name = self:NormalizeItemName(name)
+    local okBase, base = pcall(GetItemInfo, entry.itemId)
+    if okBase and type(base) == "string" and self:NormalizeItemName(base) == name then
+        return nil
+    end
+    return name
+end
+
+-- DISPLAY-ONLY item name: the client's full localized name of the roll when
+-- it is cached, else GetEntryDisplayName (client base name + stored suffix).
+-- Logic keeps using GetEntryDisplayName. The second value is true when the
+-- client's own roll name was used.
+function GQ.Data:GetEntryShowName(entry)
+    if not entry then
+        return nil, false
+    end
+    local name = self:SuffixTargetClientName(entry)
+    if name then
+        return name, true
+    end
+    return self:GetEntryDisplayName(entry), false
+end
+
+-- The suffix as the client prints it, for display only: the client's roll
+-- name minus the client's base name. entry.suffix stays the English key.
+function GQ.Data:SuffixShowName(entry)
+    local suffix = entry and entry.suffix
+    if type(suffix) ~= "string" or suffix == "" then
+        return suffix
+    end
+    local full = self:SuffixTargetClientName(entry)
+    if full and GetItemInfo then
+        local ok, base = pcall(GetItemInfo, entry.itemId)
+        base = ok and type(base) == "string" and self:NormalizeItemName(base) or nil
+        if base and base ~= "" and #full > #base and full:sub(1, #base) == base then
+            local rest = full:sub(#base + 1):match("^%s*(.-)%s*$")
+            if rest and rest ~= "" then
+                return rest
+            end
+        end
+    end
+    local L10N = GQ.L10N
+    if L10N and L10N.Text then
+        return L10N:Text(suffix)
+    end
+    return suffix
 end
 
 function GQ.Data:ItemNameMatchesSuffixTarget(itemName, targetName, entry)
@@ -2021,11 +2102,36 @@ function GQ.Data:SplitForeverLayoutLines(lines)
     return out
 end
 
-function GQ.Data:AddForeverTooltipLines(tooltip, lines, displayName, auditName)
+function GQ.Data:AddForeverTooltipLines(tooltip, lines, displayName, auditName, itemId)
     local setPhase
     local worn = 0
     local lastBlank = false
     local wrapWidth = 300
+    local L10N = GQ.L10N
+    local clientShown = self._clientSetShown
+
+    -- Shown text of one stored line. Every check below reads the English line
+    -- itself; only the text handed to the tooltip is Russian. A client set
+    -- bonus that the parser rewrote to the English shape shows the client's
+    -- own line again.
+    local function show(text)
+        if type(text) ~= "string" or text == "" then
+            return text
+        end
+        local client = clientShown and clientShown[text]
+        if client then
+            return client
+        end
+        if L10N and L10N.Tip then
+            return L10N:Tip(text, itemId)
+        end
+        return text
+    end
+
+    -- Characters, not bytes: a Cyrillic letter is two bytes in UTF-8.
+    local function textLength(text)
+        return #(text:gsub("[\128-\191]", ""))
+    end
 
     local function addBlank()
         if lastBlank then
@@ -2049,7 +2155,7 @@ function GQ.Data:AddForeverTooltipLines(tooltip, lines, displayName, auditName)
         end
         local current = ""
         for word in text:gmatch("%S+") do
-            if current ~= "" and (#current + 1 + #word) > 72 then
+            if current ~= "" and (textLength(current) + 1 + textLength(word)) > 72 then
                 tooltip:AddLine(current, r, g, b, false)
                 current = word
             elseif current == "" then
@@ -2065,7 +2171,7 @@ function GQ.Data:AddForeverTooltipLines(tooltip, lines, displayName, auditName)
 
     for _, line in ipairs(lines) do
         if type(line) == "table" then
-            tooltip:AddDoubleLine(line.left or "", line.right or "", 1, 1, 1, 1, 1, 1)
+            tooltip:AddDoubleLine(show(line.left or ""), show(line.right or ""), 1, 1, 1, 1, 1, 1)
             lastBlank = false
         else
             local isHeader = self:IsSetHeaderLine(line)
@@ -2086,7 +2192,7 @@ function GQ.Data:AddForeverTooltipLines(tooltip, lines, displayName, auditName)
 
             -- Skip a leftover title line. Never drop the hovered piece from the set list.
             if setPhase == "pieces" or not self:ForeverLineIsName(line, displayName, auditName) then
-                local text = line
+                local text = show(line)
                 if setPhase == "pieces" and not isHeader and not text:find("^%s") then
                     text = "  " .. text
                 end
@@ -2145,6 +2251,159 @@ function GQ.Data:ReadScannerLeftLines(scanner)
     return out
 end
 
+-- Lua pattern for one client format string (a GlobalString such as
+-- ITEM_SET_BONUS_GRAY), anchored at the start and open at the end. %d
+-- captures a number, %s any text, %c the sign of a stat; the plural escape
+-- |4one:few:many; matches any word form. The second value lists the
+-- conversions in capture order ("d", "s", ...), so positional formats
+-- (%2$s) still say which capture is which. nil for anything else.
+function GQ.Data:ClientFormatPattern(fmt)
+    if type(fmt) ~= "string" or fmt == "" then
+        return nil
+    end
+    local out, kinds = { "^" }, {}
+    local i, n = 1, #fmt
+    while i <= n do
+        local c = fmt:sub(i, i)
+        if c == "%" then
+            local head, conv = fmt:match("^(%%%d*%$?[%-%+ #0]*%d*%.?%d*)([%a%%])", i)
+            if not head then
+                return nil
+            end
+            if conv == "%" then
+                out[#out + 1] = "%%"
+            elseif conv == "d" or conv == "i" then
+                out[#out + 1] = "(%-?%d+)"
+                kinds[#kinds + 1] = "d"
+            elseif conv == "f" or conv == "g" then
+                out[#out + 1] = "(%-?[%d%.]+)"
+                kinds[#kinds + 1] = "f"
+            elseif conv == "c" then
+                out[#out + 1] = "([%+%-])"
+                kinds[#kinds + 1] = "c"
+            elseif conv == "s" then
+                out[#out + 1] = "(.-)"
+                kinds[#kinds + 1] = "s"
+            else
+                return nil
+            end
+            i = i + #head + 1
+        elseif c == "|" then
+            if fmt:sub(i + 1, i + 1) ~= "4" then
+                return nil
+            end
+            local close = fmt:find(";", i + 2, true)
+            if not close then
+                return nil
+            end
+            out[#out + 1] = ".-"
+            i = close + 1
+        else
+            if c:find("^[%^%$%(%)%%%.%[%]%*%+%-%?]$") then
+                c = "%" .. c
+            end
+            out[#out + 1] = c
+            i = i + 1
+        end
+    end
+    return table.concat(out), kinds
+end
+
+-- The same checks the English set-block parser makes, built from the
+-- client's own GlobalStrings. Empty on an English client: there the English
+-- checks below are the whole parser, exactly as before.
+function GQ.Data:ClientTooltipMatchers()
+    if self._clientMatchers then
+        return self._clientMatchers
+    end
+    local m = { stops = {}, skips = {}, complete = {} }
+    if not self:ClientIsEnglish() then
+        local function add(list, key)
+            local pattern = self:ClientFormatPattern(_G[key])
+            if pattern then
+                list[#list + 1] = pattern
+            end
+        end
+        local stops = {
+            "ITEM_MIN_LEVEL", "SELL_PRICE", "ITEM_LEVEL", "ITEM_BIND_ON_PICKUP", "ITEM_BIND_ON_EQUIP",
+            "ITEM_BIND_ON_USE", "DURABILITY_TEMPLATE",
+            "TRANSMOGRIFY_TOOLTIP_APPEARANCE_UNKNOWN", "TRANSMOGRIFY_STYLE_UNCOLLECTED",
+        }
+        for k = 1, #stops do
+            add(m.stops, stops[k])
+        end
+        add(m.skips, "ITEM_CLASSES_ALLOWED")
+        add(m.complete, "SELL_PRICE")
+        add(m.complete, "ITEM_CLASSES_ALLOWED")
+        -- Scanner lines are trimmed, so an empty bonus ends at the colon: the
+        -- space before the final text is optional.
+        local gray, grayKinds = self:ClientFormatPattern(_G.ITEM_SET_BONUS_GRAY)
+        if gray then
+            m.bonusGray, m.bonusGrayKinds = gray:gsub(" %(%.%-%)$", "%%s*(.-)") .. "$", grayKinds
+        end
+        local active, activeKinds = self:ClientFormatPattern(_G.ITEM_SET_BONUS)
+        if active then
+            m.bonusActive, m.bonusActiveKinds = active:gsub(" %(%.%-%)$", "%%s*(.-)") .. "$", activeKinds
+        end
+    end
+    self._clientMatchers = m
+    return m
+end
+
+function GQ.Data:ClientLineMatches(line, patterns)
+    if type(line) ~= "string" or not patterns then
+        return false
+    end
+    for k = 1, #patterns do
+        if line:find(patterns[k]) then
+            return true
+        end
+    end
+    return false
+end
+
+-- A client set bonus in the client's language ("Комплект (2 предмета): ...")
+-- rewritten to the English shape "(2) Set: ..." that the set code reads. An
+-- active bonus ("Комплект: ...") has no count; 0 means "always met". The
+-- client's own line is kept for display (AddForeverTooltipLines). nil when the
+-- line is not a bonus, and always on an English client.
+function GQ.Data:NormalizeClientSetBonus(line)
+    local m = self:ClientTooltipMatchers()
+    local function pick(pattern, kinds)
+        if not pattern or type(line) ~= "string" then
+            return nil
+        end
+        local caps = { line:match(pattern) }
+        if caps[1] == nil then
+            return nil
+        end
+        local count, rest
+        for k = 1, #kinds do
+            if kinds[k] == "d" and not count then
+                count = caps[k]
+            elseif kinds[k] == "s" and not rest then
+                rest = caps[k]
+            end
+        end
+        return count, rest
+    end
+    local key
+    local count, rest = pick(m.bonusGray, m.bonusGrayKinds)
+    if count and rest then
+        key = "(" .. count .. ") Set: " .. rest
+    else
+        local _, activeRest = pick(m.bonusActive, m.bonusActiveKinds)
+        if activeRest then
+            key = "(0) Set: " .. activeRest
+        end
+    end
+    if key then
+        self._clientSetShown = self._clientSetShown or {}
+        self._clientSetShown[key] = line
+    end
+    return key
+end
+
 function GQ.Data:ParseSetBlockFromLines(lines)
     local start
     for i = 1, #lines do
@@ -2156,20 +2415,28 @@ function GQ.Data:ParseSetBlockFromLines(lines)
     if not start then
         return nil
     end
+    local m = self:ClientTooltipMatchers()
     local block = { header = lines[start], pieces = {}, bonuses = {} }
     for i = start + 1, #lines do
         local line = lines[i]
         if line:find("^Requires Level") or line:find("^Sell Price") or line:find("^Dropped")
             or line:find("^You haven") or line:find("^Press F")
-            or line:find("^Item Level") or line:find("^Binds when") or line:find("^Durability") then
+            or line:find("^Item Level") or line:find("^Binds when") or line:find("^Durability")
+            or self:ClientLineMatches(line, m.stops) then
             break
         end
-        if line:find("^Classes:") or line:find("^Item #") or self:IsSetHeaderLine(line) then
+        if line:find("^Classes:") or line:find("^Item #") or self:IsSetHeaderLine(line)
+            or self:ClientLineMatches(line, m.skips) then
             -- Classes can sit above or below the bonuses; Item # / extra headers are not pieces.
         elseif line:find("^%(%d+%) Set") then
             block.bonuses[#block.bonuses + 1] = line
         else
-            block.pieces[#block.pieces + 1] = line
+            local bonus = self:NormalizeClientSetBonus(line)
+            if bonus then
+                block.bonuses[#block.bonuses + 1] = bonus
+            else
+                block.pieces[#block.pieces + 1] = line
+            end
         end
     end
     return block
@@ -2196,12 +2463,24 @@ function GQ.Data:ClientSetBlockIsUsable(block)
 end
 
 function GQ.Data:ScannerSetLooksComplete(lines)
+    local m = self:ClientTooltipMatchers()
     for i = 1, #lines do
-        if lines[i]:find("^Sell Price") or lines[i]:find("^Classes:") or lines[i]:find("^Press F") then
+        if lines[i]:find("^Sell Price") or lines[i]:find("^Classes:") or lines[i]:find("^Press F")
+            or self:ClientLineMatches(lines[i], m.complete) then
             return true
         end
     end
     return false
+end
+
+-- A loaded client tooltip that never shows a usable block or an end marker
+-- would keep the hover pending (and re-requesting item info) forever. After
+-- a few such scans the answer is "no client block".
+function GQ.Data:ClientSetScanGiveUp(itemId)
+    self._clientSetMisses = self._clientSetMisses or {}
+    local misses = (self._clientSetMisses[itemId] or 0) + 1
+    self._clientSetMisses[itemId] = misses
+    return misses >= 3
 end
 
 function GQ.Data:InvalidateClientSetBlock(itemId)
@@ -2237,7 +2516,7 @@ function GQ.Data:GetClientSetBlock(itemId)
     scanner:Hide()
     local block = self:ParseSetBlockFromLines(lines)
     if not block then
-        if self:ScannerSetLooksComplete(lines) then
+        if self:ScannerSetLooksComplete(lines) or self:ClientSetScanGiveUp(itemId) then
             self._clientSetBlock[itemId] = false
             return nil, false
         end
@@ -2247,7 +2526,7 @@ function GQ.Data:GetClientSetBlock(itemId)
         self._clientSetBlock[itemId] = block
         return block, false
     end
-    if self:ScannerSetLooksComplete(lines) then
+    if self:ScannerSetLooksComplete(lines) or self:ClientSetScanGiveUp(itemId) then
         self._clientSetBlock[itemId] = false
         return nil, false
     end
@@ -2371,9 +2650,16 @@ local CLIENT_IMBUE = {
     [276631] = {
         scroll = "Imbue Blade",
         base = "Blade of Silverlaine",
+        -- Parts of the effect line. English: the stored Wowhead tip and an
+        -- English client. Russian: the ruRU client's own text of that equip
+        -- spell (Spell.db2 of WoW Forever, spell 1300128: "Атаки ближнего боя
+        -- наносят замороженным целям еще $1300130s1 ед. урона от магии огня."),
+        -- which the addon's translation of the stored line starts with too.
         effect = {
             "Melee attacks deal",
             "against Frozen",
+            "Атаки ближнего боя наносят",
+            "замороженным целям",
         },
     },
 }
@@ -2395,7 +2681,12 @@ function GQ.Data:ShowImbueScrollTooltip(owner, info)
     tip:SetOwner(owner, "ANCHOR_NONE")
     tip:ClearAllPoints()
     tip:SetPoint("LEFT", owner, "RIGHT", 8, 0)
-    tip:SetText(info.scroll, 0.75, 0.75, 0.75)
+    -- CLIENT_IMBUE keeps the English name; the client's name is shown.
+    local scrollName = info.scroll
+    if GQ.L10N and GQ.L10N.ItemName then
+        scrollName = GQ.L10N.ItemName(scrollName)
+    end
+    tip:SetText(scrollName, 0.75, 0.75, 0.75)
     tip:Show()
 end
 
@@ -2407,10 +2698,18 @@ function GQ.Data:ImbueCombineLine(info)
     if not info or not info.base or info.base == "" or not info.scroll or info.scroll == "" then
         return nil
     end
-    return "Использование: соедините " .. info.base .. " и " .. info.scroll .. "."
+    -- The client's (Russian) item names when it knows them; the table stays English.
+    local base, scroll = info.base, info.scroll
+    local L10N = GQ.L10N
+    if L10N and L10N.ItemName then
+        base, scroll = L10N.ItemName(base), L10N.ItemName(scroll)
+    end
+    return "Использование: соедините " .. base .. " и " .. scroll .. "."
 end
 
-function GQ.Data:LineIsImbued(text, info)
+-- shown (optional): the same effect lines as the tooltip shows them in
+-- Russian (ImbueShownEffects); the English fragments match an English tooltip.
+function GQ.Data:LineIsImbued(text, info, shown)
     if not text or not info or not info.effect then
         return false
     end
@@ -2419,7 +2718,42 @@ function GQ.Data:LineIsImbued(text, info)
             return true
         end
     end
+    if shown then
+        for i = 1, #shown do
+            local line = shown[i]
+            -- A wrapped row holds part of the line; a short row ("", " ") is not the effect.
+            if text == line or (#text >= 12 and line:find(text, 1, true)) or text:find(line, 1, true) then
+                return true
+            end
+        end
+    end
     return false
+end
+
+-- The stored English effect lines of an imbued item as AddForeverTooltipLines
+-- shows them (L10N:Tip), so the effect is still found once it is Russian.
+function GQ.Data:ImbueShownEffects(itemId, info)
+    self._imbueShown = self._imbueShown or {}
+    local cached = self._imbueShown[itemId]
+    if cached then
+        return cached
+    end
+    local audit = self:GetForeverAudit(itemId)
+    local L10N = GQ.L10N
+    if not info or not audit or type(audit.tip) ~= "string" or audit.tip == "" or not (L10N and L10N.Tip) then
+        return nil
+    end
+    local list = {}
+    for _, line in ipairs(self:ForeverTooltipLines(audit.tip)) do
+        if type(line) == "string" and self:LineIsImbued(line, info) then
+            local shown = L10N:Tip(line, itemId)
+            if type(shown) == "string" and shown ~= "" and shown ~= line then
+                list[#list + 1] = shown
+            end
+        end
+    end
+    self._imbueShown[itemId] = list
+    return list
 end
 
 function GQ.Data:TooltipAlreadySays(tooltip, text)
@@ -2430,6 +2764,8 @@ function GQ.Data:TooltipAlreadySays(tooltip, text)
     if not name then
         return false
     end
+    -- GQ.LowerUTF8 folds Russian letters too; on ASCII it is string.lower.
+    local lower = GQ.LowerUTF8 or string.lower
     local function norm(value)
         value = tostring(value or "")
         value = value:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
@@ -2437,7 +2773,7 @@ function GQ.Data:TooltipAlreadySays(tooltip, text)
         if strtrim then
             value = strtrim(value)
         end
-        return value:lower()
+        return lower(value)
     end
     local needle = norm(text)
     if needle == "" then
@@ -2473,9 +2809,29 @@ function GQ.Data:AppendImbueOrProc(tooltip, entry)
         end
         return
     end
-    if entry.proc and entry.proc ~= "" and not self:TooltipAlreadySays(tooltip, entry.proc) then
-        tooltip:AddLine(" ")
-        tooltip:AddLine(entry.proc, 1, 1, 1, true)
+    local proc = entry.proc
+    if proc and proc ~= "" then
+        -- Shown in Russian: the whole-string translation, else the same
+        -- tooltip-line translation AddForeverTooltipLines used. The stored tip
+        -- may already show this effect in either Russian form, and a client
+        -- tooltip shows it in the client's language, so all three forms count.
+        local L10N = GQ.L10N
+        local shown, tipShown = proc, nil
+        if L10N and L10N.Text then
+            shown = L10N:Text(proc)
+        end
+        if L10N and L10N.Tip then
+            tipShown = L10N:Tip(proc, entry.itemId)
+        end
+        if shown == proc and tipShown then
+            shown = tipShown
+        end
+        if not self:TooltipAlreadySays(tooltip, shown)
+            and not (tipShown and self:TooltipAlreadySays(tooltip, tipShown))
+            and not self:TooltipAlreadySays(tooltip, proc) then
+            tooltip:AddLine(" ")
+            tooltip:AddLine(shown, 1, 1, 1, true)
+        end
     end
 end
 
@@ -2505,10 +2861,11 @@ function GQ.Data:ApplyImbueTooltipLines(tooltip, itemId)
     tooltip.gqImbueButtons = pool
     local used = 0
     local n = tooltip:NumLines() or 0
+    local shown = self:ImbueShownEffects(itemId, info)
     for i = 1, n do
         local fs = _G[name .. "TextLeft" .. i]
-        local text = fs and fs.GetText and fs:GetText()
-        if text and self:LineIsImbued(text, info) then
+        local text = GQ.PublicText(fs and fs.GetText and fs:GetText())
+        if text and self:LineIsImbued(text, info, shown) then
             fs:SetTextColor(0.55, 0.55, 0.55)
             used = used + 1
             local btn = pool[used]
@@ -2554,7 +2911,9 @@ function GQ.Data:ShowForeverItemTooltip(tooltip, entry)
     end
 
     tooltip:ClearLines()
-    tooltip:SetText(displayName, r, g, b)
+    -- Title: the client's full name of the roll when cached. displayName
+    -- stays the logic name that skips the stored title line below.
+    tooltip:SetText(self:GetEntryShowName(entry) or displayName, r, g, b)
 
     if audit.status == "missing" then
         tooltip:AddLine("Не найдено на Wowhead Forever", 1, 0.2, 0.2)
@@ -2571,7 +2930,7 @@ function GQ.Data:ShowForeverItemTooltip(tooltip, entry)
         end
     end
     self._pendingClientSet = setPending and self:LinesHaveSetHeader(lines)
-    self:AddForeverTooltipLines(tooltip, lines, displayName, audit.name)
+    self:AddForeverTooltipLines(tooltip, lines, displayName, audit.name, entry.itemId)
 
     self:AppendImbueOrProc(tooltip, entry)
     self:AppendSuffixRangeLines(tooltip, entry)
@@ -2590,9 +2949,18 @@ function GQ.Data:GetSuffixHint(entry)
         return nil
     end
 
-    local parts = { entry.suffix }
+    -- Display only: local copies are translated, entry.suffix / suffixRange
+    -- stay the English keys the ranking and compare code read.
+    local parts = { self:SuffixShowName(entry) or entry.suffix }
     if entry.suffixRange and entry.suffixRange ~= "" then
-        parts[#parts + 1] = entry.suffixRange
+        local ranges = {}
+        for part in string.gmatch(entry.suffixRange, "[^,]+") do
+            local text = self:FormatSuffixRangeText(part)
+            if text and text ~= "" then
+                ranges[#ranges + 1] = self:SuffixRangeShowText(text)
+            end
+        end
+        parts[#parts + 1] = #ranges > 0 and table.concat(ranges, ", ") or entry.suffixRange
     elseif entry.suffixId then
         parts[#parts + 1] = "ранг " .. tostring(entry.suffixId)
     end
@@ -2863,6 +3231,10 @@ end
 
 -- The stored line names one seller. The pin is the closest seller, so the
 -- description names that person. A later sentence, such as the honor cost, stays.
+-- Returns the line (unchanged), then its two parts: the Russian seller part
+-- and the stored text that followed "Bought from X." ("" when none). The rest
+-- is the raw stored tail (English for generated data), so a caller can run its
+-- English checks first and translate only what it shows.
 function GQ.Data:VendorBoughtLine(entry)
     if not entry or entry.sourceType ~= "vendor" then
         return nil
@@ -2881,15 +3253,19 @@ function GQ.Data:VendorBoughtLine(entry)
     if rest == nil then
         rest = text:match("^Продаётся у .-%.%s*(.*)$")
     end
+    -- "Продавец: <name>" keeps the name in the nominative case, so the Russian
+    -- NPC name from GQ.L10N fits ("Продаётся у Гамон" would need declension).
+    local seller = GQ.L10N and GQ.L10N.NpcName and GQ.L10N.NpcName(npc) or npc
+    local prefix = "Продавец: " .. seller .. "." .. note
     if rest ~= nil then
         if rest ~= "" then
-            return soldBy .. npc .. "." .. note .. " " .. rest
+            return prefix .. " " .. rest, prefix, rest
         end
-        return soldBy .. npc .. "." .. note
+        return prefix, prefix, ""
     end
     -- "Bought from " is 12 characters. A line with no period still names this seller.
     if text == "" or text:sub(1, 12) == "Bought from " or text:sub(1, #soldBy) == soldBy then
-        return soldBy .. npc .. "." .. note
+        return prefix, prefix, ""
     end
     return nil
 end
@@ -3050,19 +3426,30 @@ function GQ.Data:AccessLine(entry)
     if not dropLike and not questLike then
         return nil
     end
+    -- Zone, quest and item names are {z:..} {q:..} {i:..} placeholders that
+    -- GQ.L10N:Text turns into the client's own names (English when the client
+    -- has no id for one). NPC names have no ids and stay English. The checks
+    -- below compare the English data names, not these sentences.
+    local function shown(line)
+        local L10N = GQ.L10N
+        if L10N and L10N.Text then
+            return L10N:Text(line)
+        end
+        return (line:gsub("{[zqfi]:([^{}]*)}", "%1"))
+    end
     local function onyxiaLine()
         local faction = GQ.GetEffectiveFaction and GQ:GetEffectiveFaction()
         if faction == "Horde" then
-            return "Для входа в Onyxia's Lair нужен Drakefire Amulet. Эта цепочка заданий завершается заданием Blood of the Black Dragon Champion."
+            return shown("Для входа в {z:Onyxia's Lair} нужен «{i:Drakefire Amulet}». Эта цепочка заданий завершается заданием «{q:Blood of the Black Dragon Champion}».")
         end
-        return "Для входа в Onyxia's Lair нужен Drakefire Amulet. Эта цепочка заданий завершается заданием Drakefire Amulet."
+        return shown("Для входа в {z:Onyxia's Lair} нужен «{i:Drakefire Amulet}». Эта цепочка заданий завершается заданием «{q:Drakefire Amulet}».")
     end
     local function dalaranLine()
         local faction = GQ.GetEffectiveFaction and GQ:GetEffectiveFaction()
         if faction == "Horde" then
-            return "Для City of Dalaran нужен допуск. Начните с задания Key to the City у Magus Wordeen Voidglare в Tarren Mill. За задание Heart of Disruption дают Dalaran Sewer Key для входа с северо-западной стороны города. Он нужен одному участнику группы. Победа над Shade of the Archmage и выполнение задания Shrewd Negotiations делают городскую стражу нейтральной. Большинство жителей всё равно не будут предлагать вам свои услуги."
+            return shown("Для входа в {z:City of Dalaran} нужен допуск. Начните с задания «{q:Key to the City}» у Magus Wordeen Voidglare ({z:Tarren Mill}). За задание «{q:Heart of Disruption}» дают «{i:Dalaran Sewer Key}» для входа с северо-западной стороны города. Он нужен одному участнику группы. Победа над Shade of the Archmage и выполнение задания «{q:Shrewd Negotiations}» делают городскую стражу нейтральной. Большинство жителей всё равно не будут предлагать вам свои услуги.")
         end
-        return "Для City of Dalaran нужен допуск. Возьмите задание An Alarming Request у Emissary Jacques в Southshore Town Hall (Hillsbrad Foothills). Вход для Альянса находится перед городом, в Alterac Mountains. Image of Archmage Modera телепортирует вас внутрь, а труба в подземелье находится внутри, в Cantrips & Crows. Внешняя канализация на северо-западном берегу служит входом для Орды."
+        return shown("Для входа в {z:City of Dalaran} нужен допуск. Возьмите задание «{q:An Alarming Request}» у Emissary Jacques (Southshore Town Hall, {z:Hillsbrad Foothills}). Вход для Альянса находится перед городом ({z:Alterac Mountains}). Image of Archmage Modera телепортирует вас внутрь, а труба в подземелье находится внутри, в Cantrips & Crows. Внешняя канализация на северо-западном берегу служит входом для Орды.")
     end
     local function accessFor(name)
         if name == "Onyxia's Lair" then
@@ -3421,7 +3808,13 @@ function GQ.Data:CoordinateLine(itemId)
         return nil
     end
     local row = self.coordinates and self.coordinates[itemId]
-    local line = string.format("Координаты: %s %.1f, %.1f", spot.map or "", spot.x or 0, spot.y or 0)
+    -- spot.map stays the English key (spot sorting, faction deny lists); the
+    -- line shows the client's zone name.
+    local zone = spot.map or ""
+    if type(zone) == "string" and zone ~= "" and GQ.L10N and GQ.L10N.ZoneName then
+        zone = GQ.L10N.ZoneName(zone)
+    end
+    local line = string.format("Координаты: %s %.1f, %.1f", zone, spot.x or 0, spot.y or 0)
     if row and row.note and row.note ~= "" then
         line = line .. " (" .. (COORD_NOTE_RU[row.note] or row.note) .. ")"
     end
@@ -3782,6 +4175,8 @@ function GQ.Data:ProfessionMaterialsLine(entry)
             local clientName = reagentId and GetItemInfo and GetItemInfo(reagentId)
             if clientName and not self:IsPlaceholderItemName(clientName, reagentId) then
                 name = clientName
+            elseif type(name) == "string" and name ~= "" and GQ.L10N and GQ.L10N.ItemName then
+                name = GQ.L10N.ItemName(name)
             end
             if name and name ~= "" then
                 parts[#parts + 1] = string.format("%s (%d)", name, count)
@@ -3821,6 +4216,33 @@ function GQ.Data:GetProfessionInstructions(entry)
         end
     elseif instructions:find("%S") then
         rest = instructions
+    end
+
+    -- The English parse above is done; only the shown sentence is translated.
+    -- A whole stored string is an exact GQ.L10N key, but the tail after
+    -- "Crafted with X." is not one. Its Russian is the whole string's Russian
+    -- minus the Russian of that first sentence (a key too), or, without that
+    -- key, the Russian cut after its first sentence.
+    local L10N = GQ.L10N
+    if rest and L10N and L10N.Text then
+        local shown
+        if after ~= nil and L10N.Has and L10N:Has(instructions) then
+            local ru = L10N:Text(instructions)
+            local head = instructions:sub(1, #instructions - #after):match("^(.-)%s*$")
+            local ruHead = head and head ~= "" and L10N:Has(head) and L10N:Text(head) or nil
+            if type(ru) == "string" then
+                if type(ruHead) == "string" and ruHead ~= "" and #ru > #ruHead and ru:sub(1, #ruHead) == ruHead then
+                    shown = ru:sub(#ruHead + 1):match("^%s*(.-)%s*$")
+                else
+                    shown = ru:match("^.-%.%s+(.-)%s*$")
+                end
+            end
+        end
+        if type(shown) == "string" and shown ~= "" then
+            rest = shown
+        else
+            rest = L10N:Text(rest)
+        end
     end
 
     local materials = self:ProfessionMaterialsLine(entry)
@@ -4117,9 +4539,21 @@ function GQ.Data:EntrySuffixMatchesLink(entry, link)
     -- even though both share the base item id. A higher suffix id is a
     -- different enchant, not a better roll of this one.
     local fullName = self:ItemLinkFullName(link)
-    local target = self:GetEntryDisplayName(entry)
-    if fullName and target and not self:IsPlaceholderItemName(target, entry.itemId) then
-        return fullName:lower() == self:NormalizeItemName(target):lower()
+    if self:ClientIsEnglish() then
+        -- The stored English suffix is the client's language here.
+        local target = self:GetEntryDisplayName(entry)
+        if fullName and target and not self:IsPlaceholderItemName(target, entry.itemId) then
+            return fullName:lower() == self:NormalizeItemName(target):lower()
+        end
+    else
+        -- Other clients print the whole name in their language, so compare
+        -- with the client's own name of the target roll, never with the
+        -- English suffix. Until that name is cached, the roll id decides.
+        local want = self:SuffixTargetClientName(entry)
+        if fullName and want then
+            local lower = GQ.LowerUTF8 or string.lower
+            return lower(fullName) == lower(want)
+        end
     end
 
     local rolledId = self:SuffixIdFromLink(link)
@@ -4164,9 +4598,59 @@ function GQ.Data:AppendSuffixRangeLines(tooltip, entry)
     for part in string.gmatch(entry.suffixRange, "[^,]+") do
         local text = self:FormatSuffixRangeText(part)
         if text and text ~= "" then
-            tooltip:AddLine(text, 0, 1, 0)
+            tooltip:AddLine(self:SuffixRangeShowText(text), 0, 1, 0)
         end
     end
+end
+
+-- Suffix range labels (after FormatSuffixRangeText) that GQ.L10N:Tip does not
+-- cover. The wording is the client's own: ruRU names of the matching random
+-- enchants in SpellItemEnchantment.db2 of WoW Forever 1.60.1.70790 (wago.tools),
+-- e.g. "+N Healing Spells" = "+N к исцеляющим заклинаниям",
+-- "+N Fire Spell Damage" = "+N к урону от заклинаний огня".
+local SUFFIX_RANGE_RU = {
+    ["Healing"] = "к исцеляющим заклинаниям",
+    ["Spell Damage and Healing"] = "к урону от заклинаний и исцелению",
+    ["Mana per 5"] = "ед. маны каждые 5 секунд",
+    ["Holy Damage"] = "к урону от заклинаний светлой магии",
+    ["Fire Spell Power"] = "к урону от заклинаний огня",
+    ["Frost Spell Power"] = "к урону от заклинаний магии льда",
+    ["Nature Spell Power"] = "к урону от сил природы",
+    ["Shadow Spell Power"] = "к урону от заклинаний темной магии",
+    ["Arcane Spell Power"] = "к урону от заклинаний тайной магии",
+    ["Holy Spell Power"] = "к урону от заклинаний светлой магии",
+}
+
+-- One suffix range ("+7-9 Healing", "+17-19 Fire Spell Power", "+13 Healing")
+-- in Russian, for display only. Stats L10N's tooltip rules know ("+7
+-- Intellect") come from GQ.L10N:Tip; SUFFIX_RANGE_RU covers the rest.
+-- Unknown labels come back unchanged.
+function GQ.Data:SuffixRangeShowText(text)
+    if type(text) ~= "string" or text == "" then
+        return text
+    end
+    local sign, lo, hi, label = text:match("^%s*([%+%-]?)(%d+)%-(%d+)%s+(.-)%s*$")
+    if not lo then
+        hi = nil
+        sign, lo, label = text:match("^%s*([%+%-]?)(%d+)%s+(.-)%s*$")
+    end
+    if not lo or not label or label == "" then
+        return text
+    end
+    local ru = SUFFIX_RANGE_RU[label]
+    if not ru then
+        local L10N = GQ.L10N
+        local probe = "+" .. lo .. " " .. label
+        local head = "+" .. lo .. " "
+        local one = L10N and L10N.Tip and L10N:Tip(probe)
+        if type(one) == "string" and one ~= probe and one:sub(1, #head) == head and #one > #head then
+            ru = one:sub(#head + 1)
+        end
+    end
+    if not ru then
+        return text
+    end
+    return sign .. lo .. (hi and ("-" .. hi) or "") .. " " .. ru
 end
 
 -- Forever often answers SetHyperlink(item:...:suffixId) with the BASE green
@@ -4184,7 +4668,21 @@ function GQ.Data:TooltipShowsEntrySuffix(tooltip, entry)
     end
 
     local suffix = tostring(entry.suffix):gsub("^%s+", "")
-    return title:lower():find(suffix:lower(), 1, true) ~= nil
+    if title:lower():find(suffix:lower(), 1, true) ~= nil then
+        return true
+    end
+    if self:ClientIsEnglish() then
+        return false
+    end
+    -- A non-English title never holds the English suffix. The roll is shown
+    -- when the title is the client's own name of that roll (which is never
+    -- the plain base name, see SuffixTargetClientName).
+    local want = self:SuffixTargetClientName(entry)
+    if not want then
+        return false
+    end
+    local lower = GQ.LowerUTF8 or string.lower
+    return lower(title):find(lower(want), 1, true) ~= nil
 end
 
 function GQ.Data:GetItemQualityForDisplay(itemId)
@@ -4236,7 +4734,7 @@ function GQ.Data:ShowFactFallbackTooltip(tooltip, entry)
     end
 
     tooltip:ClearLines()
-    tooltip:SetText(displayName, r, g, b)
+    tooltip:SetText(self:GetEntryShowName(entry) or displayName, r, g, b)
 
     local fact = self:GetItemFact(entry.itemId)
     local audit = self:GetForeverAudit(entry.itemId)
@@ -4251,7 +4749,7 @@ function GQ.Data:ShowFactFallbackTooltip(tooltip, entry)
                 lines = self:ApplyClientSetBlock(lines, clientSet)
             end
         end
-        self:AddForeverTooltipLines(tooltip, lines, displayName, audit.name)
+        self:AddForeverTooltipLines(tooltip, lines, displayName, audit.name, entry.itemId)
     else
         if entry.slot then
             local slotText = self.SLOT_LABELS[entry.slot]
@@ -4276,6 +4774,10 @@ function GQ.Data:ShowFactFallbackTooltip(tooltip, entry)
         end
         local instructions = self:GetEntryInstructions(entry) or (fact and fact.instructions)
         if instructions and instructions ~= "" then
+            -- The raw stored string is the L10N key: translate before sanitizing.
+            if GQ.L10N and GQ.L10N.Text then
+                instructions = GQ.L10N:Text(instructions)
+            end
             instructions = self:SanitizeText(instructions) or instructions
             tooltip:AddLine(" ")
             tooltip:AddLine(instructions, 0.8, 0.8, 0.8, true)
@@ -4500,7 +5002,7 @@ function GQ.Data:ShowSuffixFallbackTooltip(tooltip, entry)
     local r, g, b = GetItemQualityColor(quality or 1)
 
     tooltip:ClearLines()
-    tooltip:SetText(displayName, r, g, b)
+    tooltip:SetText(self:GetEntryShowName(entry) or displayName, r, g, b)
     self:CopyTooltipLinesFromScanner(tooltip, scanner, true)
     self:AppendSuffixRangeLines(tooltip, entry)
 
@@ -4596,7 +5098,7 @@ function GQ.Data:ShowClientWaitTooltip(tooltip, entry, missing)
         r, g, b = GetItemQualityColor(quality)
     end
     tooltip:ClearLines()
-    tooltip:SetText(displayName, r, g, b)
+    tooltip:SetText(self:GetEntryShowName(entry) or displayName, r, g, b)
     if missing then
         tooltip:AddLine("Не найдено в клиенте", 1, 0.2, 0.2)
     else
@@ -4634,6 +5136,61 @@ function GQ.Data:TooltipPlainText(tooltip)
     return table.concat(parts, "\n")
 end
 
+-- Per SCORED_STAT_ORDER key: patterns for one whole client tooltip line that
+-- prints that stat, built from the client's own strings (ITEM_MOD_*,
+-- ITEM_MOD_*_SHORT, ARMOR_TEMPLATE). Anchored per line, because "к силе" is
+-- also the start of "к силе атаки" and "к силе заклинаний". Empty on an
+-- English client, where the English label check is the whole test as before.
+function GQ.Data:ClientStatMatchers()
+    if self._clientStatMatchers then
+        return self._clientStatMatchers
+    end
+    local out = {}
+    if not self:ClientIsEnglish() then
+        local sources = {
+            armor = { "ARMOR_TEMPLATE" },
+            str = { "ITEM_MOD_STRENGTH", "ITEM_MOD_STRENGTH_SHORT" },
+            agi = { "ITEM_MOD_AGILITY", "ITEM_MOD_AGILITY_SHORT" },
+            sta = { "ITEM_MOD_STAMINA", "ITEM_MOD_STAMINA_SHORT" },
+            int = { "ITEM_MOD_INTELLECT", "ITEM_MOD_INTELLECT_SHORT" },
+            spi = { "ITEM_MOD_SPIRIT", "ITEM_MOD_SPIRIT_SHORT" },
+            sp = { "ITEM_MOD_SPELL_POWER", "ITEM_MOD_SPELL_POWER_SHORT" },
+            heal = { "ITEM_MOD_SPELL_HEALING_DONE", "ITEM_MOD_SPELL_HEALING_DONE_SHORT" },
+            ap = { "ITEM_MOD_ATTACK_POWER", "ITEM_MOD_ATTACK_POWER_SHORT" },
+        }
+        for key, names in pairs(sources) do
+            local list = {}
+            for k = 1, #names do
+                local value = _G[names[k]]
+                if type(value) == "string" and value ~= "" then
+                    local pattern
+                    if names[k]:find("_SHORT$") then
+                        -- A bare label is printed as "+5 <label>".
+                        pattern = "^[%+%-][%d%.,]+ " .. value:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%0") .. "%.?$"
+                    else
+                        pattern = self:ClientFormatPattern(value)
+                        pattern = pattern and (pattern .. "%.?$")
+                    end
+                    if pattern then
+                        list[#list + 1] = pattern
+                    end
+                end
+            end
+            out[key] = list
+        end
+        -- Classic items print healing as an equip spell, not as ITEM_MOD_*.
+        -- On an English client the label check finds "healing" in that line;
+        -- this is the ruRU client's own text of those spells (Spell.db2 of WoW
+        -- Forever, e.g. 7675, 9314: "Усиливает исцеление от заклинаний и
+        -- эффектов максимум на $s1 ед.").
+        if out.heal and type(GetLocale) == "function" and GetLocale() == "ruRU" then
+            out.heal[#out.heal + 1] = "^Усиливает исцеление от заклинаний и эффектов максимум на [%d%.,]+ ед%.?$"
+        end
+    end
+    self._clientStatMatchers = out
+    return out
+end
+
 -- Items with no Wowhead tip still have the stats we score from. If the
 -- client tooltip already printed them, leave it alone.
 function GQ.Data:AppendScoredStatLines(tooltip, itemId)
@@ -4641,11 +5198,36 @@ function GQ.Data:AppendScoredStatLines(tooltip, itemId)
     if not tooltip or not row then
         return
     end
-    local body = self:TooltipPlainText(tooltip):lower()
+    local plain = self:TooltipPlainText(tooltip)
+    local body = plain:lower()
+    -- A client in another language prints these stats with its own words:
+    -- check each line against the client's strings (an "Equip:" prefix in the
+    -- client's language is skipped first).
+    local matchers = self:ClientStatMatchers()
+    local trigger = type(ITEM_SPELL_TRIGGER_ONEQUIP) == "string" and ITEM_SPELL_TRIGGER_ONEQUIP ~= ""
+        and ITEM_SPELL_TRIGGER_ONEQUIP or nil
+    local function clientPrinted(key)
+        local patterns = matchers[key]
+        if not patterns or #patterns == 0 then
+            return false
+        end
+        for line in string.gmatch(plain .. "\n", "([^\n]*)\n") do
+            line = line:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+            line = line:match("^%s*(.-)%s*$") or line
+            if trigger and line:sub(1, #trigger) == trigger then
+                line = line:sub(#trigger + 1):match("^%s*(.-)$") or line
+            end
+            if self:ClientLineMatches(line, patterns) then
+                return true
+            end
+        end
+        return false
+    end
     for i = 1, #SCORED_STAT_ORDER do
         local spec = SCORED_STAT_ORDER[i]
         local value = row[spec.key]
-        if type(value) == "number" and value ~= 0 and not body:find(spec.label:lower(), 1, true) then
+        if type(value) == "number" and value ~= 0 and not body:find(spec.label:lower(), 1, true)
+            and not clientPrinted(spec.key) then
             local line
             if spec.key == "armor" then
                 line = string.format("Броня: %d", value)
@@ -4793,8 +5375,10 @@ function GQ.Data:CacheContainerItemLinks()
             return
         end
 
+        -- A random-suffix roll carries its suffix id in the link in every
+        -- language; " of " only exists in English names.
         local itemName = self:ItemNameFromLink(link)
-        if not itemName or not itemName:find(" of ", 1, true) then
+        if not self:SuffixIdFromLink(link) and not (itemName and itemName:find(" of ", 1, true)) then
             return
         end
 
@@ -6612,6 +7196,9 @@ function GQ.Data:GearScoreMissText(link)
     local forClass, forSpec, forSide, forLevel = 0, 0, 0, 0
     local lo, hi
     local suffixNames = {}
+    -- A label that is not yet the client's own roll name is not cached, so
+    -- the next hover can show the client's (Russian) name.
+    local namesPending = false
     for _, entry in ipairs(rows) do
         if type(entry.pipelineScore) == "number" then
             local classOk = not entry.classes or (classFile and entry.classes[classFile])
@@ -6635,8 +7222,15 @@ function GQ.Data:GearScoreMissText(link)
                         if levelOk then
                             forLevel = forLevel + 1
                             if entry.suffix and entry.suffix ~= "" then
-                                local label = self.GetEntryDisplayName and self:GetEntryDisplayName(entry)
+                                -- Display only: the shown name of each variant.
+                                -- On an English client the fallback name is
+                                -- already in the client's language, so the
+                                -- result is cached as before.
+                                local label, fromClient = self:GetEntryShowName(entry)
                                 suffixNames[label or entry.suffix] = true
+                                if not fromClient and not self:ClientIsEnglish() then
+                                    namesPending = true
+                                end
                             end
                         end
                     end
@@ -6681,11 +7275,17 @@ function GQ.Data:GearScoreMissText(link)
         names[#names + 1] = label
     end
     table.sort(names)
+    local text
     if #names == 1 then
-        return remember("Для вашего уровня в рейтинге только " .. names[1] .. ".")
+        text = "Для вашего уровня в рейтинге только " .. names[1] .. "."
+    elseif #names > 1 then
+        text = "Не тот вариант случайных чар. В рейтинге для вашего уровня: " .. table.concat(names, ", ") .. "."
     end
-    if #names > 1 then
-        return remember("Не тот вариант случайных чар. В рейтинге для вашего уровня: " .. table.concat(names, ", ") .. ".")
+    if text then
+        if namesPending then
+            return text
+        end
+        return remember(text)
     end
     return remember("Не входит в рейтинг для вашего уровня.")
 end

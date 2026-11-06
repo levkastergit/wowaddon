@@ -183,7 +183,9 @@ function GQ.Toast:ApplyEntryVisuals(entry)
         return
     end
 
-    local itemName = GQ.Data:GetEntryDisplayName(entry) or ("Предмет " .. entry.itemId)
+    -- Display only: the client's full name of the roll when it has it.
+    local itemName = (GQ.Data.GetEntryShowName and GQ.Data:GetEntryShowName(entry))
+        or GQ.Data:GetEntryDisplayName(entry) or ("Предмет " .. entry.itemId)
     local title = GQ.Log and GQ.Log.ObtainToastTitle and GQ.Log:ObtainToastTitle(entry)
     frame.title:SetText(title or "|cffffd200Цель получена|r")
     frame.subtitle:SetText(itemName)

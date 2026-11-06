@@ -433,6 +433,92 @@ local function ScoreNormalizedStats(statTable)
     return total
 end
 
+-- A client in another language prints item stats from its own GlobalStrings
+-- ("+5 к ловкости", "Если на персонаже: Увеличивает силу атаки на 20."), so the
+-- English patterns in ParseTooltipStatLine find nothing there. These rules are
+-- built from the same client strings and give the English stat name that the
+-- weights use. The "%c%s Stat" formats must fill a whole line ("к силе" is
+-- also the start of "к силе атаки"); the sentences follow "Equip:". An English
+-- client keeps the English patterns alone.
+local CLIENT_STAT_FORMATS = {
+    { "ITEM_MOD_STRENGTH", "Strength", true },
+    { "ITEM_MOD_AGILITY", "Agility", true },
+    { "ITEM_MOD_STAMINA", "Stamina", true },
+    { "ITEM_MOD_INTELLECT", "Intellect", true },
+    { "ITEM_MOD_SPIRIT", "Spirit", true },
+    { "ITEM_MOD_ATTACK_POWER", "Attack Power" },
+    { "ITEM_MOD_RANGED_ATTACK_POWER", "Ranged Attack Power" },
+    { "ITEM_MOD_FERAL_ATTACK_POWER", "Feral Attack Power" },
+    { "ITEM_MOD_SPELL_POWER", "Spell Power" },
+    { "ITEM_MOD_SPELL_DAMAGE_DONE", "Spell Damage" },
+    { "ITEM_MOD_SPELL_HEALING_DONE", "Healing" },
+    { "ITEM_MOD_HIT_RATING", "Hit Rating" },
+    { "ITEM_MOD_HIT_MELEE_RATING", "Hit Rating" },
+    { "ITEM_MOD_HIT_RANGED_RATING", "Hit Rating" },
+    { "ITEM_MOD_CRIT_RATING", "Critical Strike Rating" },
+    { "ITEM_MOD_CRIT_MELEE_RATING", "Critical Strike Rating" },
+    { "ITEM_MOD_CRIT_RANGED_RATING", "Critical Strike Rating" },
+    { "ITEM_MOD_HIT_SPELL_RATING", "Spell Hit Rating" },
+    { "ITEM_MOD_CRIT_SPELL_RATING", "Spell Critical Strike Rating" },
+    { "ITEM_MOD_HASTE_RATING", "Haste Rating" },
+    { "ITEM_MOD_EXPERTISE_RATING", "Expertise Rating" },
+    { "ITEM_MOD_ARMOR_PENETRATION_RATING", "Armor Penetration Rating" },
+}
+
+-- Lua pattern for a client format with one number: "%c%s к ловкости" ->
+-- "%+(%d+) к ловкости". Only a positive sign counts, as in the English
+-- patterns. nil for a format with any other specifier or a grammar escape.
+local function ClientFormatPattern(fmt)
+    if type(fmt) ~= "string" or fmt == "" or fmt:find("|", 1, true) then
+        return nil
+    end
+    local marked = fmt:gsub("%%%d*%$?([cds])", "\001%1")
+    if marked:find("%", 1, true) then
+        return nil
+    end
+    marked = marked:gsub("[%^%$%(%)%.%[%]%*%+%-%?]", "%%%0")
+    local numbers = 0
+    local pattern = marked:gsub("\001([cds])", function(kind)
+        if kind == "c" then
+            return "%+"
+        end
+        numbers = numbers + 1
+        return "(%d+)"
+    end)
+    if numbers ~= 1 then
+        return nil
+    end
+    return pattern
+end
+
+local clientStatRules -- nil: not built yet; false: none (English client)
+
+local function ClientStatRules()
+    if clientStatRules ~= nil then
+        return clientStatRules
+    end
+    clientStatRules = false
+    local locale = type(GetLocale) == "function" and GetLocale() or nil
+    if type(locale) ~= "string" or locale:sub(1, 2) == "en" then
+        return clientStatRules
+    end
+    local rules = {}
+    for i = 1, #CLIENT_STAT_FORMATS do
+        local row = CLIENT_STAT_FORMATS[i]
+        local pattern = ClientFormatPattern(_G[row[1]])
+        if pattern then
+            if row[3] then
+                pattern = "^" .. pattern .. "$"
+            end
+            rules[#rules + 1] = { pattern = pattern, stat = row[2] }
+        end
+    end
+    if #rules > 0 then
+        clientStatRules = rules
+    end
+    return clientStatRules
+end
+
 local function ParseTooltipStatLine(text, byName)
     text = GQ.PublicText(text)
     if not text then
@@ -466,6 +552,17 @@ local function ParseTooltipStatLine(text, byName)
         if amount then
             local statName = pattern[2]
             byName[statName] = math.max(byName[statName] or 0, tonumber(amount))
+        end
+    end
+
+    local rules = ClientStatRules()
+    if rules then
+        for i = 1, #rules do
+            local amount = text:match(rules[i].pattern)
+            if amount then
+                local statName = rules[i].stat
+                byName[statName] = math.max(byName[statName] or 0, tonumber(amount))
+            end
         end
     end
 end

@@ -23,6 +23,38 @@ local function GetItemIdFromLink(link)
     return tonumber(link:match("item:(%d+)"))
 end
 
+-- Key of upgradeItemNames: the name as the client prints it, lower-cased on
+-- both sides of the compare. string.lower leaves Cyrillic letters as they are.
+local function NameKey(name)
+    if GQ.LowerUTF8 then
+        return GQ.LowerUTF8(name)
+    end
+    return name:lower()
+end
+
+-- The client's own item name (Russian on a Russian client), or nil while the
+-- client does not have the item yet ("Item 23173" placeholders are not names).
+local function ClientItemName(itemId)
+    if not itemId or type(GetItemInfo) ~= "function" then
+        return nil
+    end
+    local ok, name = pcall(GetItemInfo, itemId)
+    if not ok or type(name) ~= "string" or name == "" then
+        return nil
+    end
+    if GQ.Data and GQ.Data.IsPlaceholderItemName and GQ.Data:IsPlaceholderItemName(name, itemId) then
+        return nil
+    end
+    return name
+end
+
+-- The stored item names are English. Only on an English client are they also
+-- what the client prints, so only there do they serve as name keys.
+local function ClientIsEnglish()
+    local locale = type(GetLocale) == "function" and GetLocale() or nil
+    return locale == nil or locale == "enUS" or locale == "enGB"
+end
+
 local function ResolveLinkFromTooltip(setter)
     if not setter or not GameTooltip or not GameTooltip.GetItem then
         return nil
@@ -346,10 +378,10 @@ function GQ.Indicator:MatchTrainerServiceName(serviceName)
     end
 
     local trimmed = strtrim(serviceName)
-    local keys = { trimmed:lower() }
+    local keys = { NameKey(trimmed) }
     local stripped = trimmed:match("^[^:]+:%s*(.+)$")
     if stripped then
-        keys[#keys + 1] = strtrim(stripped):lower()
+        keys[#keys + 1] = NameKey(strtrim(stripped))
     end
 
     for _, key in ipairs(keys) do
@@ -362,7 +394,7 @@ function GQ.Indicator:MatchTrainerServiceName(serviceName)
 
     for _, key in ipairs(keys) do
         for itemId, name in pairs(self.itemNameCache) do
-            if self.upgradeItems[itemId] and name:lower() == key then
+            if self.upgradeItems[itemId] and NameKey(name) == key then
                 return itemId
             end
         end
@@ -374,7 +406,7 @@ function GQ.Indicator:MatchTrainerServiceName(serviceName)
                 or self.itemNameCache[itemId]
             if name and not (GQ.Data and GQ.Data.IsPlaceholderItemName and GQ.Data:IsPlaceholderItemName(name, itemId)) then
                 self.itemNameCache[itemId] = name
-                local lowerName = name:lower()
+                local lowerName = NameKey(name)
                 for _, key in ipairs(keys) do
                     if lowerName == key then
                         self.upgradeItemNames = self.upgradeItemNames or {}
@@ -998,14 +1030,20 @@ function GQ.Indicator:RebuildCacheForSlot(slotName)
             return
         end
         items[entry.itemId] = true
-        local itemName = (GQ.Data.GetItemDisplayName and GQ.Data:GetItemDisplayName(entry.itemId))
-            or self.itemNameCache[entry.itemId]
-        if itemName and GQ.Data.IsPlaceholderItemName and GQ.Data:IsPlaceholderItemName(itemName, entry.itemId) then
-            itemName = nil
+        -- Upgrades are keyed by item id; the name key is only for UI text
+        -- that has no link. It is the client's name; the stored English
+        -- name stands in only on an English client, where the two agree.
+        local itemName = ClientItemName(entry.itemId)
+        if not itemName and ClientIsEnglish() then
+            itemName = (GQ.Data.GetItemDisplayName and GQ.Data:GetItemDisplayName(entry.itemId))
+                or self.itemNameCache[entry.itemId]
+            if itemName and GQ.Data.IsPlaceholderItemName and GQ.Data:IsPlaceholderItemName(itemName, entry.itemId) then
+                itemName = nil
+            end
         end
         if itemName then
             self.itemNameCache[entry.itemId] = itemName
-            names[itemName:lower()] = entry.itemId
+            names[NameKey(itemName)] = entry.itemId
         elseif GQ.Data and GQ.Data.RequestItemInfo then
             GQ.Data:RequestItemInfo(entry.itemId)
         else
@@ -1412,6 +1450,32 @@ function GQ.Indicator:EnsureQuestLogHooks()
     end
 end
 
+-- Adds the client's name of an upgrade once the client has the item (from
+-- GET_ITEM_INFO_RECEIVED). An English client already keys the stored English
+-- name at rebuild time, so this runs on other clients only.
+function GQ.Indicator:IndexUpgradeName(itemId)
+    itemId = tonumber(itemId)
+    if not itemId or ClientIsEnglish() then
+        return
+    end
+    local current = self.upgradeItems and self.upgradeItems[itemId]
+    local pending = self._rebuildItems and self._rebuildItems[itemId]
+    if not current and not pending then
+        return
+    end
+    local name = ClientItemName(itemId)
+    if not name then
+        return
+    end
+    local key = NameKey(name)
+    if current and self.upgradeItemNames then
+        self.upgradeItemNames[key] = itemId
+    end
+    if pending and self._rebuildNames then
+        self._rebuildNames[key] = itemId
+    end
+end
+
 function GQ.Indicator:MatchUpgradeName(text)
     if type(text) ~= "string" or text == "" or not self.upgradeItemNames then
         return nil
@@ -1421,11 +1485,12 @@ function GQ.Indicator:MatchUpgradeName(text)
     if text == "" then
         return nil
     end
-    local id = self.upgradeItemNames[text:lower()]
+    local key = NameKey(text)
+    local id = self.upgradeItemNames[key]
     if id then
         return id
     end
-    local stripped = text:lower():gsub("%s*x%d+$", ""):gsub("^%d+%s*x%s*", "")
+    local stripped = key:gsub("%s*x%d+$", ""):gsub("^%d+%s*x%s*", "")
     return self.upgradeItemNames[stripped]
 end
 
@@ -1901,6 +1966,7 @@ function GQ.Indicator:Init()
                 if name then
                     GQ.Indicator.itemNameCache[itemId] = name
                 end
+                GQ.Indicator:IndexUpgradeName(itemId)
             end
             return
         end

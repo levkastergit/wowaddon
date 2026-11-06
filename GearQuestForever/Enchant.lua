@@ -184,6 +184,209 @@ local ROWS = {
     { slots = "ranged", skill = 240, level = 40, name = "Sniper Scope", effect = "+7 к урону оружия дальнего боя", rng = 7 },
 }
 
+-- Recipe spell of each row: the Enchanting (333), Leatherworking (165) or
+-- Engineering (202) spell with exactly this English name in the WoW Forever
+-- client's SpellName and SkillLineAbility tables (build 1.60.1.70790). The
+-- client names the spell in its own language, so a Russian client shows the
+-- name from its profession window. Display only: row.name stays the key.
+local SPELL_BY_NAME = {
+    ["Enchant Bracer - Inferior Stamina"] = 7418,
+    ["Enchant Bracer - Minor Stamina"] = 7457,
+    ["Enchant Bracer - Minor Spirit"] = 7766,
+    ["Enchant Bracer - Minor Intellect"] = 1248458,
+    ["Enchant Bracer - Minor Agility"] = 7779,
+    ["Enchant Bracer - Minor Strength"] = 7782,
+    ["Enchant Bracer - Minor Healing Power"] = 1248459,
+    ["Enchant Bracer - Lesser Spirit"] = 7859,
+    ["Enchant Bracer - Lesser Stamina"] = 13501,
+    ["Enchant Bracer - Lesser Agility"] = 1248460,
+    ["Enchant Bracer - Lesser Strength"] = 13536,
+    ["Enchant Bracer - Lesser Intellect"] = 13622,
+    ["Enchant Bracer - Spirit"] = 13642,
+    ["Enchant Bracer - Stamina"] = 13648,
+    ["Enchant Bracer - Strength"] = 13661,
+    ["Enchant Bracer - Agility"] = 1248497,
+    ["Enchant Bracer - Lesser Healing Power"] = 1248498,
+    ["Enchant Bracer - Intellect"] = 13822,
+    ["Enchant Bracer - Greater Spirit"] = 13846,
+    ["Enchant Bracer - Deflection"] = 13931,
+    ["Enchant Bracer - Greater Agility"] = 1248500,
+    ["Enchant Bracer - Greater Strength"] = 13939,
+    ["Enchant Bracer - Greater Stamina"] = 13945,
+    ["Enchant Bracer - Greater Intellect"] = 20008,
+    ["Enchant Bracer - Superior Spirit"] = 20009,
+    ["Enchant Bracer - Mana Regeneration"] = 23801,
+    ["Enchant Bracer - Superior Agility"] = 1248599,
+    ["Enchant Bracer - Superior Strength"] = 20010,
+    ["Enchant Bracer - Healing Power"] = 23802,
+    ["Enchant Bracer - Superior Intellect"] = 1248661,
+    ["Enchant Bracer - Superior Stamina"] = 20011,
+    ["Enchant Bracer - Superior Deflection"] = 1248665,
+    ["Enchant Chest - Inferior Stamina"] = 7420,
+    ["Enchant Chest - Minor Intellect"] = 7443,
+    ["Enchant Chest - Lesser Stamina"] = 7748,
+    ["Enchant Chest - Lesser Intellect"] = 7776,
+    ["Enchant Chest - Stamina"] = 7857,
+    ["Enchant Chest - Intellect"] = 13607,
+    ["Enchant Chest - Minor Stats"] = 13626,
+    ["Enchant Chest - Greater Stamina"] = 13640,
+    ["Enchant Chest - Greater Intellect"] = 13663,
+    ["Enchant Chest - Superior Stamina"] = 13858,
+    ["Enchant Chest - Superior Intellect"] = 13917,
+    ["Enchant Chest - Stats"] = 13941,
+    ["Enchant Chest - Major Stamina"] = 20026,
+    ["Enchant Chest - Major Intellect"] = 20028,
+    ["Enchant Chest - Greater Stats"] = 20025,
+    ["Enchant Gloves - Agility"] = 13815,
+    ["Enchant Gloves - Strength"] = 13887,
+    ["Enchant Gloves - Minor Haste"] = 13948,
+    ["Enchant Gloves - Greater Agility"] = 20012,
+    ["Enchant Gloves - Greater Strength"] = 20013,
+    ["Enchant Gloves - Superior Agility"] = 25080,
+    ["Enchant Gloves - Superior Strength"] = 1248640,
+    ["Enchant Gloves - Healing Power"] = 25079,
+    ["Enchant Gloves - Fire Power"] = 25078,
+    ["Enchant Gloves - Frost Power"] = 25074,
+    ["Enchant Gloves - Shadow Power"] = 25073,
+    ["Enchant Gloves - Arcane Power"] = 1213626,
+    ["Enchant Gloves - Holy Power"] = 1213622,
+    ["Enchant Gloves - Natural Power"] = 1248645,
+    ["Enchant Boots - Minor Agility"] = 7867,
+    ["Enchant Boots - Minor Stamina"] = 7863,
+    ["Enchant Boots - Lesser Agility"] = 13637,
+    ["Enchant Boots - Lesser Stamina"] = 13644,
+    ["Enchant Boots - Lesser Spirit"] = 13687,
+    ["Enchant Boots - Stamina"] = 13836,
+    ["Enchant Boots - Minor Speed"] = 13890,
+    ["Enchant Boots - Agility"] = 13935,
+    ["Enchant Boots - Greater Stamina"] = 20020,
+    ["Enchant Boots - Spirit"] = 20024,
+    ["Enchant Boots - Greater Agility"] = 20023,
+    ["Enchant Cloak - Minor Agility"] = 13419,
+    ["Enchant Cloak - Defense"] = 13635,
+    ["Enchant Cloak - Greater Defense"] = 13746,
+    ["Enchant Cloak - Lesser Agility"] = 13882,
+    ["Enchant Cloak - Superior Defense"] = 20015,
+    ["Enchant Cloak - Dodge"] = 25086,
+    ["Enchant Necklace - Agility"] = 1249059,
+    ["Enchant Necklace - Strength"] = 1249019,
+    ["Enchant Necklace - Deflection"] = 1249060,
+    ["Enchant Necklace - Healing Power"] = 1249058,
+    ["Enchant Necklace - Spell Power"] = 1249057,
+    ["Enchant Shield - Minor Stamina"] = 13378,
+    ["Enchant Shield - Lesser Protection"] = 13464,
+    ["Enchant Shield - Lesser Spirit"] = 13485,
+    ["Enchant Shield - Lesser Stamina"] = 13631,
+    ["Enchant Shield - Spirit"] = 13659,
+    ["Enchant Shield - Stamina"] = 13817,
+    ["Enchant Shield - Greater Spirit"] = 13905,
+    ["Enchant Shield - Greater Stamina"] = 20017,
+    ["Enchant Shield - Superior Spirit"] = 20016,
+    ["Enchant Weapon - Minor Striking"] = 7788,
+    ["Enchant Weapon - Insight"] = 1248757,
+    ["Enchant Weapon - Revelation"] = 1248805,
+    ["Enchant Weapon - Recovery"] = 1248760,
+    ["Enchant Weapon - Lesser Striking"] = 13503,
+    ["Enchant Weapon - Winter's Might"] = 21931,
+    ["Enchant Weapon - Striking"] = 13693,
+    ["Enchant Weapon - Greater Striking"] = 13943,
+    ["Enchant Weapon - Fiery Weapon"] = 13898,
+    ["Enchant Weapon - Grand Crusader"] = 1231128,
+    ["Enchant Weapon - Grand Sorcerer"] = 1231164,
+    ["Enchant Weapon - Agility"] = 23800,
+    ["Enchant Weapon - Strength"] = 23799,
+    ["Enchant Weapon - Crusader"] = 20034,
+    ["Enchant Weapon - Lifestealing"] = 20032,
+    ["Enchant Weapon - Healing Power"] = 22750,
+    ["Enchant Weapon - Spell Power"] = 22749,
+    ["Enchant Weapon - Mighty Intellect"] = 23804,
+    ["Enchant Weapon - Mighty Spirit"] = 23803,
+    ["Enchant Weapon - Superior Striking"] = 20031,
+    ["Enchant 2H Weapon - Lesser Intellect"] = 7793,
+    ["Enchant 2H Weapon - Minor Impact"] = 7745,
+    ["Enchant 2H Weapon - Lesser Spirit"] = 13380,
+    ["Enchant 2H Weapon - Lesser Impact"] = 13529,
+    ["Enchant 2H Weapon - Impact"] = 13695,
+    ["Enchant 2H Weapon - Lesser Agility"] = 1248510,
+    ["Enchant 2H Weapon - Lesser Strength"] = 1248511,
+    ["Enchant 2H Weapon - Greater Impact"] = 13937,
+    ["Enchant 2H Weapon - Strength"] = 1248668,
+    ["Enchant 2H Weapon - Agility"] = 27837,
+    ["Enchant 2H Weapon - Superior Impact"] = 20030,
+    ["Enchant 2H Weapon - Major Intellect"] = 20036,
+    ["Enchant 2H Weapon - Major Spirit"] = 20035,
+    ["Enchant 2H Weapon - Mighty Healing Power"] = 1248636,
+    ["Enchant 2H Weapon - Mighty Spell Power"] = 1248607,
+    ["Light Armor Kit"] = 2152,
+    ["Forceful Medium Armor Kit"] = 1255123,
+    ["Mystic Medium Armor Kit"] = 1255124,
+    ["Medium Armor Kit"] = 2165,
+    ["Heavy Armor Kit"] = 3780,
+    ["Forceful Heavy Armor Kit"] = 1255095,
+    ["Mystic Heavy Armor Kit"] = 1255096,
+    ["Thick Armor Kit"] = 10487,
+    ["Forceful Thick Armor Kit"] = 1255073,
+    ["Mystic Thick Armor Kit"] = 1255074,
+    ["Rugged Armor Kit"] = 19058,
+    ["Forceful Rugged Armor Kit"] = 1254965,
+    ["Mystic Rugged Armor Kit"] = 1254966,
+    ["Core Armor Kit"] = 22727,
+    ["Wild Leather Armor Kit"] = 1306532,
+    ["Crude Scope"] = 3977,
+    ["Standard Scope"] = 3978,
+    ["Accurate Scope"] = 3979,
+    ["Deadly Scope"] = 12597,
+    ["Sniper Scope"] = 12620,
+}
+
+local spellNameCache = {}
+
+-- The client's own name of a spell id, nil when it has none.
+local function ClientSpellName(spellId)
+    if not spellId then
+        return nil
+    end
+    local cached = spellNameCache[spellId]
+    if cached then
+        return cached
+    end
+    local name
+    if C_Spell and C_Spell.GetSpellName then
+        local ok, n = pcall(C_Spell.GetSpellName, spellId)
+        if ok then
+            name = n
+        end
+    end
+    if name == nil and type(GetSpellInfo) == "function" then
+        local ok, n = pcall(GetSpellInfo, spellId)
+        if ok then
+            name = n
+        end
+    end
+    if GQ.PublicText then
+        name = GQ.PublicText(name)
+    end
+    if type(name) ~= "string" or name == "" then
+        return nil
+    end
+    spellNameCache[spellId] = name
+    return name
+end
+
+-- Name shown for a row: a GQ.L10N translation when there is one, else the
+-- client's spell name, else the English name.
+local function RowDisplayName(row)
+    local name = row.name
+    local L10N = GQ.L10N
+    if L10N and L10N.Text then
+        local ok, text = pcall(L10N.Text, L10N, name)
+        if ok and type(text) == "string" and text ~= "" and text ~= name then
+            return text
+        end
+    end
+    return ClientSpellName(SPELL_BY_NAME[name]) or name
+end
+
 local function SkillNeed(skill)
     skill = skill or 1
     -- A formula learned at 300 turns yellow a little later.
@@ -231,6 +434,8 @@ end
 
 -- Classic item class 2 is a weapon. These subclass ids are bows, guns, and crossbows.
 local SCOPE_SUBCLASS = { [2] = true, [3] = true, [18] = true }
+-- Thrown weapons, wands, and fishing poles take no enchant.
+local BARE_SUBCLASS = { [16] = true, [19] = true, [20] = true }
 
 local function InstantSlot(idOrLink)
     if type(GetItemInfoInstant) ~= "function" or not idOrLink then
@@ -243,9 +448,11 @@ local function InstantSlot(idOrLink)
     return subType, equipLoc, classID, subClassID
 end
 
+-- subType is in the client's language, so the ids decide whenever the client
+-- gave them. The English names are only for a client that gave no ids.
 local function IsScopeWeapon(subType, classID, subClassID)
-    if classID == 2 and subClassID and SCOPE_SUBCLASS[subClassID] then
-        return true
+    if type(classID) == "number" then
+        return classID == 2 and SCOPE_SUBCLASS[subClassID] == true
     end
     return subType == "Bow" or subType == "Bows"
         or subType == "Gun" or subType == "Guns"
@@ -253,8 +460,8 @@ local function IsScopeWeapon(subType, classID, subClassID)
 end
 
 local function IsBareWeapon(subType, classID, subClassID)
-    if classID == 2 and (subClassID == 16 or subClassID == 19 or subClassID == 20) then
-        return true
+    if type(classID) == "number" then
+        return classID == 2 and BARE_SUBCLASS[subClassID] == true
     end
     return subType == "Fishing Pole" or subType == "Fishing Poles"
         or subType == "Wand" or subType == "Wands"
@@ -387,10 +594,14 @@ function GQ.Enchant:SlotKey(entry, link)
     local id = ItemIdOf(entry, link)
     local subType, equipLoc, classID, subClassID = InstantSlot(id or link)
     if (not equipLoc or equipLoc == "") and id and ItemIsCached(id) and GetItemInfo then
-        local name, _, _, _, _, _, knownSub, _, knownLoc = GetItemInfo(id)
+        local name, _, _, _, _, _, knownSub, _, knownLoc, _, _, knownClass, knownSubclass = GetItemInfo(id)
         if name then
             subType = knownSub
             equipLoc = knownLoc
+            if type(knownClass) == "number" then
+                classID = knownClass
+                subClassID = knownSubclass
+            end
         end
     end
     if IsBareWeapon(subType, classID, subClassID) or equipLoc == "INVTYPE_THROWN" then
@@ -512,7 +723,7 @@ function GQ.Enchant:Text(link, entry)
     if not best or not bestScore or bestScore <= 0 then
         return nil
     end
-    return string.format("|cffffff00Рекомендуемые чары|r|cffffffff: %s - %s|r", best.name, best.effect)
+    return string.format("|cffffff00Рекомендуемые чары|r|cffffffff: %s - %s|r", RowDisplayName(best), best.effect)
 end
 
 function GQ.Enchant:Add(tooltip, link, entry)

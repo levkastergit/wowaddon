@@ -70,6 +70,16 @@ local driver
 local placed = 0
 local placedMap, placedGen, placedGuided
 
+-- Display only: the client's name for an English zone name from the data
+-- (GQ.L10N), or the name unchanged.
+local function ZoneText(name)
+    local L10N = GQ.L10N
+    if type(name) == "string" and name ~= "" and L10N and L10N.ZoneName then
+        return L10N.ZoneName(name)
+    end
+    return name
+end
+
 local function ShowPinTooltip(frame)
     local pin = frame.pinData
     if not pin or not pin.entry then
@@ -77,10 +87,18 @@ local function ShowPinTooltip(frame)
     end
     local entry = pin.entry
     GameTooltip:SetOwner(frame, "ANCHOR_RIGHT")
-    local name = GQ.Data and GQ.Data.GetEntryDisplayName and GQ.Data:GetEntryDisplayName(entry)
+    local data = GQ.Data
+    local name = data and ((data.GetEntryShowName and data:GetEntryShowName(entry))
+        or (data.GetEntryDisplayName and data:GetEntryDisplayName(entry)))
     GameTooltip:AddLine(name or ("Предмет " .. tostring(entry.itemId)), 1, 0.82, 0)
     local info = C_Map and C_Map.GetMapInfo and C_Map.GetMapInfo(pin.mapId)
-    local zone = pin.map or (info and info.name) or entry.zone or ""
+    -- pin.map stays the English key (ClientMapId, ProjectPin). Shown: the
+    -- client's name of that zone, else of the map the pin is drawn on.
+    local zone = ZoneText(pin.map)
+    if (zone == nil or zone == pin.map) and info and type(info.name) == "string" and info.name ~= "" then
+        zone = info.name
+    end
+    zone = zone or ZoneText(entry.zone) or ""
     if zone ~= "" then
         GameTooltip:AddLine(string.format("%s %.1f, %.1f", zone, pin.x, pin.y), 0.6, 0.8, 1)
     end
@@ -177,7 +195,11 @@ local function ProjectPin(pin, shownMapId)
     if srcId and srcId == shownMapId then
         return nx, ny
     end
-    if MapName(shownMapId) == pin.map then
+    -- The same zone under another map id (two map rows with one name).
+    -- pin.map is the English data name and equals only an English client's
+    -- name; the client's names of both ids compare in any language.
+    local shownName = MapName(shownMapId)
+    if shownName == pin.map or (shownName and shownName == MapName(srcId)) then
         return nx, ny
     end
     if not (srcId and C_Map and C_Map.GetWorldPosFromMapPos and C_Map.GetMapPosFromWorldPos and CreateVector2D) then

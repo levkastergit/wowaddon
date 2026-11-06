@@ -295,37 +295,75 @@ end
 -- plus the shortest walk after the last landing. Menethil, Southshore, and
 -- Auberdine are one ship, both ways. Southshore is the stop in the middle.
 -- Stormwind Harbor and Auberdine are a separate ship.
+-- area is the place's AreaTable id (AreaTable.db2 of WoW Forever 1.60.1.70790,
+-- wago.tools), for showing the client's own name of the place. Display only.
 local CROSSINGS = {
-    { id = "durotar", zone = "Durotar", mapId = 1411, place = "Durotar", x = 50.8, y = 13.6, faction = "Horde", kind = "Zeppelin", to = { "tirisfal", "gromgol" } },
-    { id = "tirisfal", zone = "Tirisfal Glades", mapId = 1420, place = "Tirisfal Glades", x = 61.0, y = 59.0, faction = "Horde", kind = "Zeppelin", to = { "durotar", "gromgol" } },
-    { id = "gromgol", zone = "Stranglethorn Vale", mapId = 1434, place = "Grom'gol", x = 31.5, y = 29.6, faction = "Horde", kind = "Zeppelin", to = { "durotar", "tirisfal" } },
-    { id = "ratchet", zone = "The Barrens", mapId = 1413, place = "Ratchet", x = 63.6, y = 38.7, kind = "Ship", to = { "booty" } },
-    { id = "booty", zone = "Stranglethorn Vale", mapId = 1434, place = "Booty Bay", x = 26.0, y = 73.2, kind = "Ship", to = { "ratchet" } },
-    { id = "auberdine", zone = "Darkshore", mapId = 1439, place = "Auberdine", x = 32.7, y = 43.7, faction = "Alliance", kind = "Ship", to = { "southshore", "stormwind" } },
-    { id = "menethilNorth", zone = "Wetlands", mapId = 1437, place = "Menethil Harbor", x = 4.7, y = 57.0, faction = "Alliance", kind = "Ship", to = { "southshore" } },
-    { id = "southshore", zone = "Hillsbrad Foothills", mapId = 1424, place = "Southshore", x = 50.6, y = 61.0, faction = "Alliance", kind = "Ship", to = { "auberdine", "menethilNorth" } },
-    { id = "stormwind", zone = "Stormwind City", mapId = 1453, place = "Stormwind Harbor", x = 22.6, y = 56.1, faction = "Alliance", kind = "Ship", to = { "auberdine" } },
-    { id = "menethilSouth", zone = "Wetlands", mapId = 1437, place = "Menethil Harbor", x = 5.0, y = 63.0, faction = "Alliance", kind = "Ship", to = { "theramore" } },
-    { id = "theramore", zone = "Dustwallow Marsh", mapId = 1445, place = "Theramore", x = 71.0, y = 56.0, faction = "Alliance", kind = "Ship", to = { "menethilSouth" } },
-    { id = "steamwheedle", zone = "Tanaris", mapId = 1446, place = "Steamwheedle Port", x = 66.6, y = 22.0, kind = "Ship", to = { "powderfuse" } },
-    { id = "powderfuse", zone = "Riverglades", mapId = 2548, place = "Powderfuse Port", x = 78.1, y = 51.9, kind = "Ship", to = { "steamwheedle" } },
-    { id = "valanaarEast", zone = "Zephras Isle", mapId = 2521, place = "Valanaar", x = 65.9, y = 83.5, faction = "Alliance", kind = "Skycutter", to = { "dalaran" } },
-    { id = "dalaran", zone = "Alterac Mountains", mapId = 1416, place = "Dalaran", x = 12.5, y = 51.8, faction = "Alliance", kind = "Skycutter", to = { "valanaarEast" } },
-    { id = "valanaarWest", zone = "Zephras Isle", mapId = 2521, place = "Valanaar", x = 57.9, y = 80.9, faction = "Horde", kind = "Zeppelin", to = { "skywatcher" } },
-    { id = "skywatcher", zone = "Mulgore", mapId = 1412, place = "Skywatcher Plateau", x = 34.3, y = 25.8, faction = "Horde", kind = "Zeppelin", to = { "valanaarWest" } },
+    { id = "durotar", zone = "Durotar", mapId = 1411, place = "Durotar", area = 14, x = 50.8, y = 13.6, faction = "Horde", kind = "Zeppelin", to = { "tirisfal", "gromgol" } },
+    { id = "tirisfal", zone = "Tirisfal Glades", mapId = 1420, place = "Tirisfal Glades", area = 85, x = 61.0, y = 59.0, faction = "Horde", kind = "Zeppelin", to = { "durotar", "gromgol" } },
+    { id = "gromgol", zone = "Stranglethorn Vale", mapId = 1434, place = "Grom'gol", area = 117, x = 31.5, y = 29.6, faction = "Horde", kind = "Zeppelin", to = { "durotar", "tirisfal" } },
+    { id = "ratchet", zone = "The Barrens", mapId = 1413, place = "Ratchet", area = 392, x = 63.6, y = 38.7, kind = "Ship", to = { "booty" } },
+    { id = "booty", zone = "Stranglethorn Vale", mapId = 1434, place = "Booty Bay", area = 35, x = 26.0, y = 73.2, kind = "Ship", to = { "ratchet" } },
+    { id = "auberdine", zone = "Darkshore", mapId = 1439, place = "Auberdine", area = 442, x = 32.7, y = 43.7, faction = "Alliance", kind = "Ship", to = { "southshore", "stormwind" } },
+    { id = "menethilNorth", zone = "Wetlands", mapId = 1437, place = "Menethil Harbor", area = 150, x = 4.7, y = 57.0, faction = "Alliance", kind = "Ship", to = { "southshore" } },
+    { id = "southshore", zone = "Hillsbrad Foothills", mapId = 1424, place = "Southshore", area = 271, x = 50.6, y = 61.0, faction = "Alliance", kind = "Ship", to = { "auberdine", "menethilNorth" } },
+    { id = "stormwind", zone = "Stormwind City", mapId = 1453, place = "Stormwind Harbor", area = 17203, x = 22.6, y = 56.1, faction = "Alliance", kind = "Ship", to = { "auberdine" } },
+    { id = "menethilSouth", zone = "Wetlands", mapId = 1437, place = "Menethil Harbor", area = 150, x = 5.0, y = 63.0, faction = "Alliance", kind = "Ship", to = { "theramore" } },
+    { id = "theramore", zone = "Dustwallow Marsh", mapId = 1445, place = "Theramore", area = 513, x = 71.0, y = 56.0, faction = "Alliance", kind = "Ship", to = { "menethilSouth" } },
+    { id = "steamwheedle", zone = "Tanaris", mapId = 1446, place = "Steamwheedle Port", area = 977, x = 66.6, y = 22.0, kind = "Ship", to = { "powderfuse" } },
+    { id = "powderfuse", zone = "Riverglades", mapId = 2548, place = "Powderfuse Port", area = 16727, x = 78.1, y = 51.9, kind = "Ship", to = { "steamwheedle" } },
+    { id = "valanaarEast", zone = "Zephras Isle", mapId = 2521, place = "Valanaar", area = 16638, x = 65.9, y = 83.5, faction = "Alliance", kind = "Skycutter", to = { "dalaran" } },
+    { id = "dalaran", zone = "Alterac Mountains", mapId = 1416, place = "Dalaran", area = 279, x = 12.5, y = 51.8, faction = "Alliance", kind = "Skycutter", to = { "valanaarEast" } },
+    { id = "valanaarWest", zone = "Zephras Isle", mapId = 2521, place = "Valanaar", area = 16638, x = 57.9, y = 80.9, faction = "Horde", kind = "Zeppelin", to = { "skywatcher" } },
+    { id = "skywatcher", zone = "Mulgore", mapId = 1412, place = "Skywatcher Plateau", area = 17045, x = 34.3, y = 25.8, faction = "Horde", kind = "Zeppelin", to = { "valanaarWest" } },
 }
 
 -- Display names for the transport kinds. dock.kind stays the English key.
-local DOCK_KIND_RU = { Zeppelin = "Дирижабль", Ship = "Корабль" }
+-- "Skycutter" has no client string in the sources checked; the addon's own wording.
+local DOCK_KIND_RU = { Zeppelin = "Дирижабль", Ship = "Корабль", Skycutter = "Небесный катер" }
 
 local function DockKindText(dock)
     local kind = dock and dock.kind
     return kind and (DOCK_KIND_RU[kind] or kind) or ""
 end
 
+-- Display only: the client's name for an English zone name from the data
+-- (GQ.L10N), or the name unchanged. spot.map stays English for every check.
+local function ZoneText(name)
+    local L10N = GQ.L10N
+    if type(name) == "string" and name ~= "" and L10N and L10N.ZoneName then
+        return L10N.ZoneName(name)
+    end
+    return name
+end
+
+local function ClientIsEnglish()
+    local locale = type(GetLocale) == "function" and GetLocale() or nil
+    return locale == nil or locale == "enUS" or locale == "enGB"
+end
+
+-- A dock's place as shown. An English client keeps the stored text, which is
+-- not always the area's name ("Grom'gol" is the area "Grom'gol Base Camp");
+-- any other client shows its own name of the area.
+local function PlaceText(dock)
+    local place = dock and (dock.place or dock.zone)
+    if not place then
+        return ""
+    end
+    if ClientIsEnglish() then
+        return place
+    end
+    if dock.area and C_Map and type(C_Map.GetAreaInfo) == "function" then
+        local ok, name = pcall(C_Map.GetAreaInfo, dock.area)
+        if ok and type(name) == "string" and name ~= "" then
+            return name
+        end
+    end
+    return ZoneText(place) or place
+end
+
 local function DockLabel(dock)
     if dock and dock.place and dock.place ~= "" then
-        return DockKindText(dock) .. ": " .. dock.place
+        return DockKindText(dock) .. ": " .. PlaceText(dock)
     end
     return DockKindText(dock)
 end
@@ -649,7 +687,9 @@ local function UpdateGuide(frame)
     local sample = frame.aim
     local refresh = not sample or sample.spot ~= spot or now >= (frame.aimUntil or 0)
     if refresh then
-        sample = { spot = spot, text = spot and spot.map or "Нет метки", kind = "none" }
+        -- sample.text is display text (zone names in the client's language);
+        -- the only check on it is the HERE_TEXT compare below.
+        sample = { spot = spot, text = spot and ZoneText(spot.map) or "Нет метки", kind = "none" }
         local spotMap = spot and GQ.Data and GQ.Data.SpotMapId and GQ.Data:SpotMapId(spot)
         local px, py = spotMap and PositionOn(spotMap)
         if spot and px and py and spot.x and spot.y then
@@ -671,7 +711,7 @@ local function UpdateGuide(frame)
             sample.kind = "map"
             sample.east = sx - px
             sample.north = py - sy
-            sample.text = spot.map or sample.text
+            sample.text = ZoneText(spot.map) or sample.text
         end
     elseif spot and spotMap and spot.x and spot.y and C_Map and C_Map.GetBestMapForUnit then
         local playerMap = C_Map.GetBestMapForUnit("player")
@@ -759,7 +799,7 @@ local function UpdateGuide(frame)
                     sample.kind = "map"
                     sample.east = ssx - ppx
                     sample.north = ppy - ssy
-                    sample.text = spot.map or sample.text
+                    sample.text = ZoneText(spot.map) or sample.text
                 end
             end
         end
@@ -841,18 +881,19 @@ function GQ.Guide:Init()
             return
         end
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        local name = GQ.Data.GetEntryDisplayName and GQ.Data:GetEntryDisplayName(entry) or entry.questName or "Цель"
+        local name = (GQ.Data.GetEntryShowName and GQ.Data:GetEntryShowName(entry))
+            or (GQ.Data.GetEntryDisplayName and GQ.Data:GetEntryDisplayName(entry)) or entry.questName or "Цель"
         GameTooltip:SetText(name, GOLD_R, GOLD_G, GOLD_B)
         local spot = self.spot
         if spot and spot.map then
-            GameTooltip:AddLine(string.format("%s %.1f, %.1f", spot.map, spot.x or 0, spot.y or 0), 1, 1, 1)
+            GameTooltip:AddLine(string.format("%s %.1f, %.1f", ZoneText(spot.map), spot.x or 0, spot.y or 0), 1, 1, 1)
         end
         if self.crossing then
             local depart = self.crossing
             local dest = self.crossingTo
-            local line = DockKindText(depart) .. ": " .. (depart.place or depart.zone)
+            local line = DockKindText(depart) .. ": " .. PlaceText(depart)
             if dest and dest.place and dest.id ~= depart.id then
-                line = line .. " — " .. dest.place
+                line = line .. " — " .. PlaceText(dest)
             end
             GameTooltip:AddLine(line, 1, 1, 1)
         end
